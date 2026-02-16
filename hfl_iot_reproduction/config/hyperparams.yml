@@ -1,0 +1,18 @@
+T: 50             # SIM_ROUNDS
+E: 1              # LOCAL_EPOCHS
+epochs: 5 
+eta: 0.01         # LR
+B: 32             # BATCH_SIZE
+bs: 32
+
+round_delay: 1.0
+
+# Edge
+alpha_edge: 0.7
+beta_edge: 0.3
+sw_init: 7
+pdesired: 0.75
+alpha_sw: 0.5
+
+# Cloud
+beta_cloud: 0.5

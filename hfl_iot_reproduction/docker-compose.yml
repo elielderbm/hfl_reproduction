@@ -1,0 +1,202 @@
+version: "3.9"
+
+services:
+  data_prep:
+    build:
+      context: .
+      dockerfile: docker/analyzer.Dockerfile
+    image: hfl_analyzer:latest
+    container_name: data_prep
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./project:/workspace/project
+      - ./data:/workspace/data
+      - ./config:/workspace/config
+    working_dir: /workspace
+    command: ["python", "data/prepare_har.py"]
+    networks: [hflnet]
+
+  cloud:
+    build:
+      context: .
+      dockerfile: docker/cloud.Dockerfile
+    image: hfl_cloud:latest
+    container_name: cloud
+    environment:
+      - ROLE=cloud
+      - SIM_ROUNDS=${SIM_ROUNDS}
+      - SIM_BETA_CLOUD=${SIM_BETA_CLOUD}
+      - SIM_PDESIRED=${SIM_PDESIRED}
+      - PYTHONUNBUFFERED=1
+      # 🔐 chaves válidas (64 hex = 32 bytes)
+      - EDGE1_KEY=00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF
+      - EDGE2_KEY=A1B2C3D4E5F67890123456789ABCDEF0A1B2C3D4E5F67890123456789ABCDEF0
+    volumes:
+      - ./project:/workspace/project
+      - ./outputs:/workspace/outputs
+      - ./logs:/workspace/logs
+      - ./data:/workspace/data
+    working_dir: /workspace
+    command: ["python", "-m", "project.cloud.server"]
+    networks: [hflnet]
+    depends_on:
+      - data_prep
+
+  edge1:
+    build:
+      context: .
+      dockerfile: docker/edge.Dockerfile
+    image: hfl_edge:latest
+    container_name: edge1
+    environment:
+      - ROLE=edge
+      - EDGE_ID=edge1
+      - PYTHONUNBUFFERED=1
+      - EDGE_KEY_HEX=00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF
+    volumes:
+      - ./project:/workspace/project
+      - ./outputs:/workspace/outputs
+      - ./logs:/workspace/logs
+      - ./data:/workspace/data
+    working_dir: /workspace
+    command: ["python", "-m", "project.edge.run"]
+    networks: [hflnet]
+    depends_on:
+      - data_prep
+      - cloud
+
+  edge2:
+    build:
+      context: .
+      dockerfile: docker/edge.Dockerfile
+    image: hfl_edge:latest
+    container_name: edge2
+    environment:
+      - ROLE=edge
+      - EDGE_ID=edge2
+      - PYTHONUNBUFFERED=1
+      - EDGE_KEY_HEX=A1B2C3D4E5F67890123456789ABCDEF0A1B2C3D4E5F67890123456789ABCDEF0
+    volumes:
+      - ./project:/workspace/project
+      - ./outputs:/workspace/outputs
+      - ./logs:/workspace/logs
+      - ./data:/workspace/data
+    working_dir: /workspace
+    command: ["python", "-m", "project.edge.run"]
+    networks: [hflnet]
+    depends_on:
+      - data_prep
+      - cloud
+
+  iot1:
+    build:
+      context: .
+      dockerfile: docker/iot.Dockerfile
+    image: hfl_iot:latest
+    container_name: iot1
+    environment:
+      - ROLE=iot
+      - IOT_ID=iot1
+      - EDGE_URI=ws://edge1:8765   # 🔗 conecta no edge1
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./project:/workspace/project
+      - ./outputs:/workspace/outputs
+      - ./logs:/workspace/logs
+      - ./data:/workspace/data
+    working_dir: /workspace
+    command: ["python", "-m", "project.iot.run"]
+    networks: [hflnet]
+    depends_on:
+      - data_prep
+      - edge1
+
+  iot2:
+    build:
+      context: .
+      dockerfile: docker/iot.Dockerfile
+    image: hfl_iot:latest
+    container_name: iot2
+    environment:
+      - ROLE=iot
+      - IOT_ID=iot2
+      - EDGE_URI=ws://edge1:8765   # 🔗 conecta no edge1
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./project:/workspace/project
+      - ./outputs:/workspace/outputs
+      - ./logs:/workspace/logs
+      - ./data:/workspace/data
+    working_dir: /workspace
+    command: ["python", "-m", "project.iot.run"]
+    networks: [hflnet]
+    depends_on:
+      - data_prep
+      - edge1
+
+  iot3:
+    build:
+      context: .
+      dockerfile: docker/iot.Dockerfile
+    image: hfl_iot:latest
+    container_name: iot3
+    environment:
+      - ROLE=iot
+      - IOT_ID=iot3
+      - EDGE_URI=ws://edge2:8765   # 🔗 conecta no edge2
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./project:/workspace/project
+      - ./outputs:/workspace/outputs
+      - ./logs:/workspace/logs
+      - ./data:/workspace/data
+    working_dir: /workspace
+    command: ["python", "-m", "project.iot.run"]
+    networks: [hflnet]
+    depends_on:
+      - data_prep
+      - edge2
+
+  iot4:
+    build:
+      context: .
+      dockerfile: docker/iot.Dockerfile
+    image: hfl_iot:latest
+    container_name: iot4
+    environment:
+      - ROLE=iot
+      - IOT_ID=iot4
+      - EDGE_URI=ws://edge2:8765   # 🔗 conecta no edge2
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./project:/workspace/project
+      - ./outputs:/workspace/outputs
+      - ./logs:/workspace/logs
+      - ./data:/workspace/data
+    working_dir: /workspace
+    command: ["python", "-m", "project.iot.run"]
+    networks: [hflnet]
+    depends_on:
+      - data_prep
+      - edge2
+
+  analyzer:
+    build:
+      context: .
+      dockerfile: docker/analyzer.Dockerfile
+    image: hfl_analyzer:latest
+    container_name: analyzer
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./project:/workspace/project
+      - ./outputs:/workspace/outputs
+      - ./logs:/workspace/logs
+      - ./data:/workspace/data
+      - ./config:/workspace/config
+    working_dir: /workspace
+
+networks:
+  hflnet:
+    driver: bridge

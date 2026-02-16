@@ -1,0 +1,5 @@
+# Mapeia IoT -> subject_id (HAR tem sujeitos de 1..30)
+iot1: 1
+iot2: 2
+iot3: 3
+iot4: 4
