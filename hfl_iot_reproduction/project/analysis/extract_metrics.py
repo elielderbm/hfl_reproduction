@@ -1,8 +1,6 @@
-import json, csv, os
-from pathlib import Path
+import json
+from project.analysis.paths import LOGS, OUT
 
-LOGS = Path("/workspace/logs")
-OUT  = Path("/workspace/outputs")
 OUT.mkdir(parents=True, exist_ok=True)
 
 def collect_to_csv():
@@ -18,7 +16,9 @@ def collect_to_csv():
     # write unified CSV
     of = OUT/"metrics_all.csv"
     import pandas as pd
-    pd.DataFrame(rows).to_csv(of, index=False)
+    tmp = of.with_suffix(of.suffix + ".tmp")
+    pd.DataFrame(rows).to_csv(tmp, index=False)
+    tmp.replace(of)
     print(f"[analysis] wrote {of}")
 
 if __name__ == "__main__":

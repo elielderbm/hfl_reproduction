@@ -1,12 +1,20 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-from pathlib import Path
+from project.analysis.paths import OUT
 
-OUT = Path("/workspace/outputs")
 OUT.mkdir(parents=True, exist_ok=True)
 CSV = OUT/"metrics_all.csv"
 
+def _save_current_fig(path):
+    tmp = path.with_name(f"{path.stem}.tmp{path.suffix}")
+    plt.savefig(tmp)
+    tmp.replace(path)
+
 def plot():
+    if not CSV.exists():
+        print("Run extract_metrics first.")
+        return
+
     df = pd.read_csv(CSV)
     # IoT curves: val_acc/val_loss by round
     iot = df[(df["type"]=="metric") & (df["file"].str.startswith("iot"))].copy()
@@ -16,19 +24,19 @@ def plot():
             plt.figure()
             sub.plot(x="round", y="val_acc")
             plt.title(f"IoT {key} - Val Accuracy")
-            plt.savefig(OUT/f"iot_{key}_val_acc.png"); plt.close()
+            _save_current_fig(OUT/f"iot_{key}_val_acc.png"); plt.close()
 
             plt.figure()
             sub.plot(x="round", y="val_loss")
             plt.title(f"IoT {key} - Val Loss")
-            plt.savefig(OUT/f"iot_{key}_val_loss.png"); plt.close()
+            _save_current_fig(OUT/f"iot_{key}_val_loss.png"); plt.close()
 
             # 🔹 Só plota round_time_ms se existir
             if "round_time_ms" in sub.columns:
                 plt.figure()
                 sub.plot(x="round", y="round_time_ms")
                 plt.title(f"IoT {key} - Round Time (ms)")
-                plt.savefig(OUT/f"iot_{key}_round_time.png"); plt.close()
+                _save_current_fig(OUT/f"iot_{key}_round_time.png"); plt.close()
 
     # Edge: window and pactual over time
     edge = df[(df["type"]=="metric") & (df["file"].str.startswith("edge"))].copy()
@@ -37,7 +45,7 @@ def plot():
             plt.figure()
             sub.plot(y=["window","pactual"])
             plt.title(f"Edge {key} - Window & Participation")
-            plt.savefig(OUT/f"edge_{key}_win_p.png"); plt.close()
+            _save_current_fig(OUT/f"edge_{key}_win_p.png"); plt.close()
 
     # Cloud: round vs edges
     cloud = df[(df["type"]=="metric") & (df["file"].str.startswith("cloud"))].copy()
@@ -45,7 +53,7 @@ def plot():
         plt.figure()
         cloud.plot(x="round", y="edges")
         plt.title("Cloud - Edges contributing")
-        plt.savefig(OUT/f"cloud_edges.png"); plt.close()
+        _save_current_fig(OUT/f"cloud_edges.png"); plt.close()
 
     print("[analysis] plots saved to outputs/*.png")
 

@@ -3,3 +3,5 @@ outputs/*.csv
 outputs/*.png
 data/clients/
 data/har/
+**/__pycache__/
+outputs/results_*
