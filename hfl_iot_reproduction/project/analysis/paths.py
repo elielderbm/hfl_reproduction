@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 
@@ -10,8 +11,7 @@ def _find_repo_root() -> Path:
 
 
 ROOT = _find_repo_root()
-OUT = ROOT / "outputs"
-LOGS = ROOT / "logs"
+OUT = Path(os.getenv("OUT_DIR", str(ROOT / "outputs")))
+LOGS = Path(os.getenv("LOGS_DIR", str(ROOT / "logs")))
 DATA = ROOT / "data"
 CONFIG = ROOT / "config"
-

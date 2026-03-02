@@ -1,7 +1,7 @@
 import os, json, time
 from pathlib import Path
 
-LOGS = Path("/workspace/logs")
+LOGS = Path(os.getenv("LOGS_DIR", "/workspace/logs"))
 
 def log_line(stream, record: dict):
     LOGS.mkdir(parents=True, exist_ok=True)

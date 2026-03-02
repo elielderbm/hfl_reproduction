@@ -20,6 +20,8 @@ def main():
     # IoT summary
     iot = df[(df["type"] == "metric") & (df["file"].str.startswith("iot"))].copy()
     if not iot.empty:
+        acc_col = "train_acc" if "train_acc" in iot.columns else "val_acc"
+        loss_col = "train_loss" if "train_loss" in iot.columns else "val_loss"
         rows = []
         for iot_id, sub in iot.groupby("iot"):
             sub = sub.sort_values("round")
@@ -27,11 +29,11 @@ def main():
                 {
                     "iot": iot_id,
                     "rounds": int(sub["round"].max()) if "round" in sub.columns else len(sub),
-                    "val_acc_mean": float(sub["val_acc"].mean()) if "val_acc" in sub.columns else None,
-                    "val_acc_first": float(sub["val_acc"].dropna().iloc[0]) if "val_acc" in sub.columns and sub["val_acc"].notna().any() else None,
-                    "val_acc_last": float(sub["val_acc"].dropna().iloc[-1]) if "val_acc" in sub.columns and sub["val_acc"].notna().any() else None,
-                    "val_acc_best": float(sub["val_acc"].max()) if "val_acc" in sub.columns else None,
-                    "val_loss_last": float(sub["val_loss"].dropna().iloc[-1]) if "val_loss" in sub.columns and sub["val_loss"].notna().any() else None,
+                    "acc_mean": float(sub[acc_col].mean()) if acc_col in sub.columns else None,
+                    "acc_first": float(sub[acc_col].dropna().iloc[0]) if acc_col in sub.columns and sub[acc_col].notna().any() else None,
+                    "acc_last": float(sub[acc_col].dropna().iloc[-1]) if acc_col in sub.columns and sub[acc_col].notna().any() else None,
+                    "acc_best": float(sub[acc_col].max()) if acc_col in sub.columns else None,
+                    "loss_last": float(sub[loss_col].dropna().iloc[-1]) if loss_col in sub.columns and sub[loss_col].notna().any() else None,
                 }
             )
         g = pd.DataFrame(rows).set_index("iot").sort_index()
@@ -40,6 +42,9 @@ def main():
         if "round_time_ms" in iot.columns:
             rt = iot.groupby("iot", dropna=False)["round_time_ms"].mean()
             g["round_time_ms_mean"] = rt
+            if "payload_bytes" in iot.columns:
+                pb = iot.groupby("iot", dropna=False)["payload_bytes"].mean()
+                g["throughput_kbps_mean"] = (pb / 1024.0) / (rt / 1000.0)
 
         print("== IoT Summary ==")
         print(g.to_string())
@@ -82,6 +87,8 @@ def main():
             "edges_min": float(cloud["edges"].min()) if "edges" in cloud.columns and cloud["edges"].notna().any() else None,
             "edges_max": float(cloud["edges"].max()) if "edges" in cloud.columns and cloud["edges"].notna().any() else None,
             "beta_cloud_mode": float(cloud["beta_cloud"].dropna().mode().iloc[0]) if "beta_cloud" in cloud.columns and cloud["beta_cloud"].notna().any() else None,
+            "global_acc_last": float(cloud["global_acc"].dropna().iloc[-1]) if "global_acc" in cloud.columns and cloud["global_acc"].notna().any() else None,
+            "global_acc_best": float(cloud["global_acc"].max()) if "global_acc" in cloud.columns else None,
         }
         g = pd.DataFrame([row])
         print("\n== Cloud Summary ==")

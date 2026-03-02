@@ -40,6 +40,7 @@ docker compose up data_prep      # Executar 2x
 - **edge1/edge2**: recebem atualizações de IoTs, agregam de forma **assíncrona** usando **janela deslizante** e suavização histórica.
 - **iot1..iot4**: treinam localmente (TensorFlow), enviam atualização criptografada (Salsa20) + métricas locais.
 - **analyzer**: consolida logs em CSV e gera gráficos.
+- **baseline (opcional)**: `SYNC_MODE=1` nos edges habilita agregação síncrona (HierFAVG) para comparação.
 
 ## Como usar
 1. **Dependências**: Docker + Docker Compose.
@@ -47,9 +48,12 @@ docker compose up data_prep      # Executar 2x
 3. **Subir**: `docker compose up --build` (prepara dataset automaticamente).
 4. **Analisar**:
    ```bash
-   docker compose run --rm analyzer python -m project.analysis.extract_metrics
-   docker compose run --rm analyzer python -m project.analysis.plot_curves
-   docker compose run --rm analyzer python -m project.analysis.summarize
+    docker compose run --rm analyzer python -m project.analysis.extract_metrics
+    docker compose run --rm analyzer python -m project.analysis.plot_curves
+    docker compose run --rm analyzer python -m project.analysis.summarize
+    docker compose run --rm analyzer python -m project.analysis.paper_metrics
+    docker compose run --rm analyzer python -m project.analysis.paper_report
+    docker compose run --rm analyzer python data/heterogeneity_metrics.py
    ```
 5. **Limpar** (volumes/artefatos): `bash scripts/clean.sh`
 
@@ -67,6 +71,13 @@ docker compose up data_prep      # Executar 2x
 - Scripts de **pré-processamento** reproduzem o cenário **não-IID por participante** (HAR).
 - **Assíncrono verdadeiro**: IoTs têm *delays* aleatórios (normal) por rodada, emulando heterogeneidade.
 - Agregações e métricas replicam o **método do artigo** (com variáveis/nomes análogos).
+
+## Experimentos Async vs Sync (HierFAVG)
+Para rodar comparação automática e salvar logs/outputs separados:
+```
+bash scripts/run_experiments.sh
+```
+Os resultados ficam em `logs/experiments/<RUN_ID>/` e `outputs/experiments/<RUN_ID>/`.
 
 ## Licenças
 - Código sob MIT. HAR dataset (UCI) conforme a licença deles.

@@ -17,7 +17,14 @@ def load_hparams():
     hp["pdesired"] = env_f("PDESIRED", hp["pdesired"])
     hp["alpha_sw"] = env_f("ALPHA_SW", hp["alpha_sw"])
     hp["beta_cloud"] = env_f("BETA_CLOUD", 0.5)
-    hp["round_delay"] = env_f("ROUND_DELAY", hp.get("round_delay", 1.0))
+    hp["gamma_edge"] = env_f("GAMMA_EDGE", hp.get("gamma_edge", 0.9))
+    hp["q_fixed"] = os.getenv("Q_FIXED", str(hp.get("q_fixed", "1.0")))
+    hp["delay_mu"] = env_f("IOT_DELAY_MU", hp.get("delay_mu", 0.0))
+    hp["delay_sigma"] = env_f("IOT_DELAY_SIGMA", hp.get("delay_sigma", 0.0))
+
+    # compat keys (used in older code paths)
+    hp["epochs"] = hp["E"]
+    hp["bs"] = hp["B"]
     return hp
 
 def client_subject(iot_id: str) -> int:

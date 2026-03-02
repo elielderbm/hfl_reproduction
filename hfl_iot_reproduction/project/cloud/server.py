@@ -1,10 +1,11 @@
-import os, asyncio, json, numpy as np, random
+import os, asyncio, json, time, numpy as np, random
 from collections import defaultdict
 from project.common.messaging import ws_server
 from project.common.crypto import decrypt
-from project.common.model import build_model, compile_model, get_weights_vector
+from project.common.model import build_model, compile_model, get_weights_vector, set_weights_vector
 from project.common.logging_utils import log_event, log_metric
 from project.common.config import load_hparams
+from project.common.data_utils import load_global_test
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
 
 PORT = 9000
@@ -18,6 +19,9 @@ beta_cloud = float(os.getenv("BETA_CLOUD", str(hp["beta_cloud"])))
 edge_meta = defaultdict(lambda: {"p":0.0,"q":1.0})
 w_global = None
 round_ctr = 0
+eval_model = None
+X_test = None
+y_test = None
 
 # Conexões ativas
 peers = {}  # edge_id -> websocket
@@ -30,7 +34,7 @@ def edge_key_for(edge_id):
     return os.getenv("EDGE_KEY_HEX","00112233445566778899AABBCCDDEEFF")
 
 async def handler(ws, path):
-    global w_global, round_ctr, peers
+    global w_global, round_ctr, peers, eval_model, X_test, y_test
 
     try:
         hello_raw = await ws.recv()
@@ -86,7 +90,9 @@ async def handler(ws, path):
 
             ek = edge_key_for(edge)
             try:
+                dec_start = time.time()
                 dec = decrypt(ek, bytes.fromhex(msg["bytes"]))
+                dec_ms = (time.time() - dec_start) * 1000.0
                 we = np.frombuffer(dec, dtype=np.float32)
             except Exception as e:
                 print(f"[cloud] erro decriptando modelo de {edge}: {e}")
@@ -97,21 +103,32 @@ async def handler(ws, path):
                 continue
 
             edge_meta[edge]["p"] = float(msg.get("pactual", 0.0))
-            edge_meta[edge]["q"] = float(msg.get("qcurrent", 1.0))
+            edge_meta[edge]["q"] = float(msg.get("qedge", 1.0))
             handler.edge_last[edge] = we
 
             # Agregação
             num = np.zeros_like(w_global, dtype=np.float32)
             den = 0.0
+            ve_map = {}
             for e_id, w in handler.edge_last.items():
                 p = edge_meta[e_id]["p"]; q = edge_meta[e_id]["q"]
                 v = beta_cloud * p + (1.0 - beta_cloud) * q
+                ve_map[e_id] = float(v)
                 num += v * w
                 den += v
             if den > 0:
                 w_global = num / den
 
             round_ctr += 1
+
+            # Avaliação global no conjunto de teste
+            global_acc = None
+            global_loss = None
+            if X_test is not None and len(y_test) > 0:
+                set_weights_vector(eval_model, w_global)
+                global_loss, global_acc = eval_model.evaluate(X_test, y_test, verbose=0)
+                global_acc = float(global_acc)
+                global_loss = float(global_loss)
 
             # 🔹 Broadcast do modelo para todos os edges
             dead = []
@@ -120,7 +137,8 @@ async def handler(ws, path):
                     await peer_ws.send(json.dumps({
                         "type":"model",
                         "whex": w_global.tobytes().hex(),
-                        "round": round_ctr
+                        "round": round_ctr,
+                        "ve": ve_map.get(e_id, 1.0),
                     }))
                     print(f"[cloud] modelo global enviado -> {e_id}, round={round_ctr}")
                 except Exception as e:
@@ -129,17 +147,29 @@ async def handler(ws, path):
             for e_id in dead:
                 peers.pop(e_id, None)
 
-            log_metric("cloud", round=round_ctr, edges=len(handler.edge_last), beta_cloud=beta_cloud)
+            log_metric(
+                "cloud",
+                round=round_ctr,
+                edges=len(handler.edge_last),
+                beta_cloud=beta_cloud,
+                global_acc=global_acc,
+                global_loss=global_loss,
+                dec_ms=dec_ms,
+                payload_bytes=msg.get("payload_bytes"),
+            )
 
     finally:
         print(f"[cloud] handler encerrado para {edge}")
         peers.pop(edge, None)
 
 async def main():
-    global w_global
+    global w_global, eval_model, X_test, y_test
     tmp = build_model()
     compile_model(tmp, lr=hp["eta"])
     w_global = get_weights_vector(tmp).copy()
+    eval_model = build_model()
+    compile_model(eval_model, lr=hp["eta"])
+    X_test, y_test = load_global_test()
     log_event("cloud", event="start", port=PORT)
     print(f"[cloud] iniciado na porta {PORT}, pesos iniciais n={w_global.size}")
     await ws_server("0.0.0.0", PORT, handler)

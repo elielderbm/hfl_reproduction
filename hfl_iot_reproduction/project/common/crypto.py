@@ -1,4 +1,4 @@
-import os, struct, hashlib
+import os, struct
 
 def _rotl32(v, n):
     return ((v << n) & 0xffffffff) | (v >> (32 - n))
@@ -9,11 +9,47 @@ def _salsa20_hash(b: bytes):
     x = list(struct.unpack("<16I", b))
     z = x[:]
     for _ in range(10):
+        # Column rounds
         z[4] ^= _rotl32((z[0] + z[12]) & 0xffffffff, 7)
         z[8] ^= _rotl32((z[4] + z[0]) & 0xffffffff, 9)
         z[12] ^= _rotl32((z[8] + z[4]) & 0xffffffff, 13)
         z[0] ^= _rotl32((z[12] + z[8]) & 0xffffffff, 18)
-        # ... (restante igual, não alterado)
+
+        z[9] ^= _rotl32((z[5] + z[1]) & 0xffffffff, 7)
+        z[13] ^= _rotl32((z[9] + z[5]) & 0xffffffff, 9)
+        z[1] ^= _rotl32((z[13] + z[9]) & 0xffffffff, 13)
+        z[5] ^= _rotl32((z[1] + z[13]) & 0xffffffff, 18)
+
+        z[14] ^= _rotl32((z[10] + z[6]) & 0xffffffff, 7)
+        z[2] ^= _rotl32((z[14] + z[10]) & 0xffffffff, 9)
+        z[6] ^= _rotl32((z[2] + z[14]) & 0xffffffff, 13)
+        z[10] ^= _rotl32((z[6] + z[2]) & 0xffffffff, 18)
+
+        z[3] ^= _rotl32((z[15] + z[11]) & 0xffffffff, 7)
+        z[7] ^= _rotl32((z[3] + z[15]) & 0xffffffff, 9)
+        z[11] ^= _rotl32((z[7] + z[3]) & 0xffffffff, 13)
+        z[15] ^= _rotl32((z[11] + z[7]) & 0xffffffff, 18)
+
+        # Row rounds
+        z[1] ^= _rotl32((z[0] + z[3]) & 0xffffffff, 7)
+        z[2] ^= _rotl32((z[1] + z[0]) & 0xffffffff, 9)
+        z[3] ^= _rotl32((z[2] + z[1]) & 0xffffffff, 13)
+        z[0] ^= _rotl32((z[3] + z[2]) & 0xffffffff, 18)
+
+        z[6] ^= _rotl32((z[5] + z[4]) & 0xffffffff, 7)
+        z[7] ^= _rotl32((z[6] + z[5]) & 0xffffffff, 9)
+        z[4] ^= _rotl32((z[7] + z[6]) & 0xffffffff, 13)
+        z[5] ^= _rotl32((z[4] + z[7]) & 0xffffffff, 18)
+
+        z[11] ^= _rotl32((z[10] + z[9]) & 0xffffffff, 7)
+        z[8] ^= _rotl32((z[11] + z[10]) & 0xffffffff, 9)
+        z[9] ^= _rotl32((z[8] + z[11]) & 0xffffffff, 13)
+        z[10] ^= _rotl32((z[9] + z[8]) & 0xffffffff, 18)
+
+        z[12] ^= _rotl32((z[15] + z[14]) & 0xffffffff, 7)
+        z[13] ^= _rotl32((z[12] + z[15]) & 0xffffffff, 9)
+        z[14] ^= _rotl32((z[13] + z[12]) & 0xffffffff, 13)
+        z[15] ^= _rotl32((z[14] + z[13]) & 0xffffffff, 18)
     return struct.pack("<16I", *[(z[i] + x[i]) & 0xffffffff for i in range(16)])
 
 def _expand32(key: bytes, nonce: bytes, counter: bytes):

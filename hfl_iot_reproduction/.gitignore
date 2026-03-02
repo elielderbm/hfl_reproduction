@@ -1,6 +1,5 @@
-logs/*.jsonl
-outputs/*.csv
-outputs/*.png
+logs/*
+outputs/*
 data/clients/
 data/har/
 **/__pycache__/

@@ -1,8 +1,10 @@
 import os
 import zipfile
-import requests
-import pandas as pd
 from pathlib import Path
+
+import pandas as pd
+import requests
+import yaml
 
 HAR_URL = "https://archive.ics.uci.edu/static/public/240/human+activity+recognition+using+smartphones.zip"
 DATA_DIR = Path("/workspace/data/har")
@@ -11,9 +13,19 @@ EXTRACTED = DATA_DIR / "UCI HAR Dataset"
 CLIENTS_DIR = Path("/workspace/data/clients")
 
 IOT_IDS = ["iot1", "iot2", "iot3", "iot4"]
+CLIENTS_MAP_PATH = Path("/workspace/config/clients.yml")
+
+def _find_extracted_root() -> Path | None:
+    # procura por train/X_train.txt em qualquer subpasta
+    for p in DATA_DIR.rglob("X_train.txt"):
+        if p.parent.name == "train":
+            return p.parent.parent
+    return None
+
 
 def ensure_extracted():
     """Garante que a pasta final UCI HAR Dataset exista"""
+    global EXTRACTED
     if (EXTRACTED / "train" / "X_train.txt").exists():
         print(f"[data_prep] Dataset já presente em {EXTRACTED}")
         return
@@ -34,7 +46,11 @@ def ensure_extracted():
             zf.extractall(DATA_DIR)
 
     if not (EXTRACTED / "train" / "X_train.txt").exists():
-        raise FileNotFoundError(f"Não encontrei {EXTRACTED}/train/X_train.txt após extração.")
+        root = _find_extracted_root()
+        if root is None:
+            raise FileNotFoundError(f"Não encontrei {EXTRACTED}/train/X_train.txt após extração.")
+        EXTRACTED = root
+        print(f"[data_prep] Dataset localizado em {EXTRACTED}")
 
 def load_split(split: str):
     root = EXTRACTED
@@ -46,21 +62,29 @@ def load_split(split: str):
     df["subject"] = subj
     return df
 
+def load_clients_map() -> dict:
+    if not CLIENTS_MAP_PATH.exists():
+        raise FileNotFoundError(f"Arquivo de mapeamento não encontrado: {CLIENTS_MAP_PATH}")
+    with open(CLIENTS_MAP_PATH, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    return {str(k): int(v) for k, v in raw.items()}
+
+
 def partition_clients(df: pd.DataFrame):
     CLIENTS_DIR.mkdir(parents=True, exist_ok=True)
 
     for iot in IOT_IDS:
         (CLIENTS_DIR / iot).mkdir(parents=True, exist_ok=True)
 
-    subjects = df["subject"].unique()
-    subjects.sort()
-
-    mapping = {}
-    for i, subj in enumerate(subjects):
-        mapping[subj] = IOT_IDS[i % len(IOT_IDS)]
+    mapping = load_clients_map()
 
     for iot in IOT_IDS:
-        client_df = df[df["subject"].map(lambda s: mapping[s] == iot)]
+        subject_id = mapping.get(iot)
+        if subject_id is None:
+            print(f"[data_prep] Sem subject_id definido para {iot}.")
+            subject_id = -1
+
+        client_df = df[df["subject"] == subject_id]
         out_dir = CLIENTS_DIR / iot
         if client_df.empty:
             pd.DataFrame().to_csv(out_dir/"train.csv", index=False)
@@ -71,18 +95,18 @@ def partition_clients(df: pd.DataFrame):
 
         client_df = client_df.sample(frac=1.0, random_state=42).reset_index(drop=True)
         n = len(client_df)
-        ntrain = int(0.6*n)
-        nval   = int(0.2*n)
+        ntrain = int(0.6 * n)
+        nval = int(0.2 * n)
 
         train = client_df.iloc[:ntrain]
-        val   = client_df.iloc[ntrain:ntrain+nval]
-        test  = client_df.iloc[ntrain+nval:]
+        val = client_df.iloc[ntrain:ntrain + nval]
+        test = client_df.iloc[ntrain + nval:]
 
         train.to_csv(out_dir/"train.csv", index=False)
         val.to_csv(out_dir/"val.csv", index=False)
         test.to_csv(out_dir/"test.csv", index=False)
 
-        print(f"[data_prep] Cliente {iot}: {len(train)}/{len(val)}/{len(test)} instâncias.")
+        print(f"[data_prep] Cliente {iot} (subject={subject_id}): {len(train)}/{len(val)}/{len(test)} instâncias.")
 
 def main():
     ensure_extracted()
