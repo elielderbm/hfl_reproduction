@@ -83,12 +83,32 @@ def main():
         _write_csv(iot_time, "paper_iot_train_time.csv")
         _plot_bar(iot_time, "iot", "train_time_ms_mean", "IoT Training Time (ms)", "paper_iot_train_time.png")
 
-    # 2) Global accuracy (cloud)
-    cloud_acc = pd.DataFrame()
-    if not cloud.empty and "global_acc" in cloud.columns:
-        cloud_acc = cloud[["round", "global_acc"]].dropna().sort_values("round")
-        _write_csv(cloud_acc, "paper_global_accuracy.csv")
-        _plot_line(cloud_acc, "round", "global_acc", "Global Accuracy", "paper_global_accuracy.png")
+    # 2) Global RMSE (cloud)
+    cloud_rmse = pd.DataFrame()
+    if not cloud.empty and "global_rmse" in cloud.columns:
+        cloud_rmse = cloud[["round", "global_rmse"]].dropna().sort_values("round")
+        _write_csv(cloud_rmse, "paper_global_rmse.csv")
+        _plot_line(cloud_rmse, "round", "global_rmse", "Global RMSE", "paper_global_rmse.png")
+
+    # 2b) Global Score (cloud)
+    cloud_score = pd.DataFrame()
+    if not cloud.empty and "global_score" in cloud.columns:
+        cloud_score = cloud[["round", "global_score"]].dropna().sort_values("round")
+        _write_csv(cloud_score, "paper_global_score.csv")
+        _plot_line(cloud_score, "round", "global_score", "Global Score", "paper_global_score.png")
+
+    # 2c) Global R2 / MAPE (cloud)
+    cloud_r2 = pd.DataFrame()
+    if not cloud.empty and "global_r2" in cloud.columns:
+        cloud_r2 = cloud[["round", "global_r2"]].dropna().sort_values("round")
+        _write_csv(cloud_r2, "paper_global_r2.csv")
+        _plot_line(cloud_r2, "round", "global_r2", "Global R2", "paper_global_r2.png")
+
+    cloud_mape = pd.DataFrame()
+    if not cloud.empty and "global_mape" in cloud.columns:
+        cloud_mape = cloud[["round", "global_mape"]].dropna().sort_values("round")
+        _write_csv(cloud_mape, "paper_global_mape.csv")
+        _plot_line(cloud_mape, "round", "global_mape", "Global MAPE", "paper_global_mape.png")
 
     # 3) Round time (cloud _ts delta)
     round_time = pd.DataFrame()
@@ -137,7 +157,10 @@ def main():
     # Summary
     summary = {
         "iot_train_time_ms_mean": _safe_mean(iot["train_time_ms"]) if "train_time_ms" in iot.columns else None,
-        "global_acc_last": float(cloud_acc["global_acc"].dropna().iloc[-1]) if not cloud_acc.empty else None,
+        "global_rmse_last": float(cloud_rmse["global_rmse"].dropna().iloc[-1]) if not cloud_rmse.empty else None,
+        "global_score_last": float(cloud_score["global_score"].dropna().iloc[-1]) if not cloud_score.empty else None,
+        "global_r2_last": float(cloud_r2["global_r2"].dropna().iloc[-1]) if not cloud_r2.empty else None,
+        "global_mape_last": float(cloud_mape["global_mape"].dropna().iloc[-1]) if not cloud_mape.empty else None,
         "round_time_s_mean": _safe_mean(round_time["round_time_s"]) if not round_time.empty else None,
         "throughput_kbps_mean": _safe_mean(throughput["throughput_kbps"]) if not throughput.empty else None,
         "iot_enc_ms_mean": _safe_mean(iot["enc_ms"]) if "enc_ms" in iot.columns else None,

@@ -1,8 +1,10 @@
 import os, asyncio, json, time, numpy as np, random
+import tensorflow as tf
 from project.common.messaging import ws_connect, b64e
 from project.common.crypto import encrypt
 from project.common.model import build_model, compile_model, get_weights_vector, set_weights_vector
 from project.common.logging_utils import log_event, log_metric
+from project.common.metrics import score_from_rmse, regression_metrics
 from project.common.config import load_hparams
 from project.common.data_utils import load_client_split
 
@@ -19,6 +21,36 @@ round_ctr = 0
 local_model = None
 w_local = None
 
+
+def _finite_ok(X, y) -> bool:
+    if X is None or y is None:
+        return False
+    if len(y) == 0 or X.size == 0:
+        return False
+    return np.isfinite(X).all() and np.isfinite(y).all()
+
+
+def _weight_stats(vec: np.ndarray) -> dict:
+    if vec is None or vec.size == 0:
+        return {}
+    return {
+        "w_norm": float(np.linalg.norm(vec)),
+        "w_mean": float(np.mean(vec)),
+        "w_std": float(np.std(vec)),
+        "w_min": float(np.min(vec)),
+        "w_max": float(np.max(vec)),
+    }
+
+
+def _predict_metrics(model, X, y):
+    try:
+        preds = model.predict(X, verbose=0).reshape(-1)
+    except Exception:
+        return None, None, None, None, None
+    if not np.isfinite(preds).all():
+        return None, None, None, None, None
+    return regression_metrics(y.reshape(-1), preds)
+
 async def run_iot():
     global round_ctr, local_model, w_local
     (Xtr, ytr), (Xv, yv), (Xt, yt) = load_client_split(IOT_ID)
@@ -32,6 +64,23 @@ async def run_iot():
     if len(ytr) == 0:
         log_event("iot", iot=IOT_ID, event="no_data")
         return
+    if not _finite_ok(Xtr, ytr):
+        log_event("iot", iot=IOT_ID, event="invalid_data", split="train")
+        return
+
+    # data stats (sanity check)
+    log_event(
+        "iot",
+        iot=IOT_ID,
+        event="data_stats",
+        x_mean=float(np.mean(Xtr)),
+        x_std=float(np.std(Xtr)),
+        y_mean=float(np.mean(ytr)),
+        y_std=float(np.std(ytr)),
+        n_train=int(len(ytr)),
+        n_val=int(len(yv)),
+        n_test=int(len(yt)),
+    )
 
     backoff = 1.0
     while round_ctr < hp["T"]:
@@ -53,22 +102,42 @@ async def run_iot():
 
                 # treino local
                 t0 = time.time()
-                local_model.fit(Xtr, ytr, batch_size=hp["B"], epochs=hp["E"], verbose=0)
+                local_model.fit(
+                    Xtr,
+                    ytr,
+                    batch_size=hp["B"],
+                    epochs=hp["E"],
+                    verbose=0,
+                    callbacks=[tf.keras.callbacks.TerminateOnNaN()],
+                )
                 train_time_ms = (time.time() - t0) * 1000.0
                 w_new = get_weights_vector(local_model)
 
-                # métricas de treino (paper)
-                train_loss, train_acc = local_model.evaluate(Xtr, ytr, verbose=0)
-                train_acc = float(train_acc)
-                train_loss = float(train_loss)
+                # se pesos ficaram inválidos, reverte para o último válido
+                if not np.isfinite(w_new).all():
+                    log_event("iot", iot=IOT_ID, event="nan_weights", round=round_ctr)
+                    set_weights_vector(local_model, w_local)
+                    w_new = w_local.copy()
+                    train_loss = train_mae = train_rmse = train_r2 = train_mape = train_score = None
+                else:
+                    # métricas de treino (regressão)
+                    train_loss, train_mae, train_rmse, train_r2, train_mape = _predict_metrics(local_model, Xtr, ytr)
+                    if train_loss is not None and not np.isfinite(train_loss):
+                        train_loss = train_mae = train_rmse = train_r2 = train_mape = None
+                    train_score = score_from_rmse(train_rmse)
 
                 # opcional: validação se existir
-                val_acc = None
                 val_loss = None
-                if len(yv) > 0:
-                    val_loss, val_acc = local_model.evaluate(Xv, yv, verbose=0)
-                    val_acc = float(val_acc)
-                    val_loss = float(val_loss)
+                val_mae = None
+                val_rmse = None
+                val_r2 = None
+                val_mape = None
+                val_score = None
+                if len(yv) > 0 and _finite_ok(Xv, yv):
+                    val_loss, val_mae, val_rmse, val_r2, val_mape = _predict_metrics(local_model, Xv, yv)
+                    if val_loss is not None and not np.isfinite(val_loss):
+                        val_loss = val_mae = val_rmse = val_r2 = val_mape = None
+                    val_score = score_from_rmse(val_rmse)
 
                 # delay heterogêneo ~ N(mu, sigma)
                 delay_s = max(0.0, random.gauss(hp["delay_mu"], hp["delay_sigma"]))
@@ -84,10 +153,18 @@ async def run_iot():
                     "iot": IOT_ID,
                     "round": round_ctr,
                     "bytes": b64e(enc),
-                    "train_acc": train_acc,
+                    "train_score": train_score,
                     "train_loss": train_loss,
-                    "val_acc": val_acc,
+                    "train_mae": train_mae,
+                    "train_rmse": train_rmse,
+                    "train_r2": train_r2,
+                    "train_mape": train_mape,
+                    "val_score": val_score,
                     "val_loss": val_loss,
+                    "val_mae": val_mae,
+                    "val_rmse": val_rmse,
+                    "val_r2": val_r2,
+                    "val_mape": val_mape,
                     "payload_bytes": len(enc)
                 }))
 
@@ -99,19 +176,29 @@ async def run_iot():
                 w_local = w_edge.copy()
 
                 round_time_ms = (time.time() - round_start) * 1000.0
+                w_stats = _weight_stats(w_new)
                 log_metric(
                     "iot",
                     iot=IOT_ID,
                     round=round_ctr,
-                    train_acc=train_acc,
+                    train_score=train_score,
                     train_loss=train_loss,
-                    val_acc=val_acc,
+                    train_mae=train_mae,
+                    train_rmse=train_rmse,
+                    train_r2=train_r2,
+                    train_mape=train_mape,
+                    val_score=val_score,
                     val_loss=val_loss,
+                    val_mae=val_mae,
+                    val_rmse=val_rmse,
+                    val_r2=val_r2,
+                    val_mape=val_mape,
                     train_time_ms=train_time_ms,
                     enc_ms=enc_ms,
                     delay_ms=delay_s * 1000.0,
                     round_time_ms=round_time_ms,
                     payload_bytes=len(enc),
+                    **w_stats,
                 )
         except Exception as e:
             log_event("iot", iot=IOT_ID, event="reconnect", error=str(e))

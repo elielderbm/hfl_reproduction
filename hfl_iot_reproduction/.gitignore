@@ -1,6 +1,8 @@
 logs/*
 outputs/*
+outputs/weights/
 data/clients/
 data/har/
+data/intel_lab/
 **/__pycache__/
 outputs/results_*

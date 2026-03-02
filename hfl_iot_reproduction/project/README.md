@@ -5,6 +5,7 @@ Implementação das camadas **IoT**, **Edge** e **Cloud** com:
 - **Salsa20** (criptografia leve) para updates de modelo
 - **Agregação Assíncrona** no Edge com janela deslizante
 - **Agregação Global Ponderada** no Cloud
+- **Regressão temporal** (RMSE/MAE + score)
 - **Métricas e Logs** em JSONL
 - **Scripts de Análise**
 

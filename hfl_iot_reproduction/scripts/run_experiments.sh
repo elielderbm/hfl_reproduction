@@ -58,5 +58,6 @@ run_mode sync
 export LOGS_DIR="${BASE_LOGS}/async"
 export OUT_DIR="${BASE_OUT}/async"
 docker compose run --rm analyzer python -m project.analysis.paper_report --compare-dir "${BASE_OUT}/sync"
+docker compose run --rm analyzer python -m project.analysis.compare_async_sync --async-dir "${BASE_OUT}/async" --sync-dir "${BASE_OUT}/sync"
 
 echo "[experiments] done. Logs in ./logs/experiments/${RUN_ID}, outputs in ./outputs/experiments/${RUN_ID}"

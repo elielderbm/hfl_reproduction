@@ -1,19 +1,41 @@
-# Simple MLP classifier compatible with TensorFlow 2.x
+# Simple MLP regressor compatible with TensorFlow 2.x
+import os
 import tensorflow as tf
 import numpy as np
 
-def build_model(input_dim=561, nclass=6):
+from project.common.dataset_config import load_dataset_config
+
+
+def build_model(input_dim=None, output_dim=1):
+    if input_dim is None:
+        cfg = load_dataset_config()
+        input_dim = int(cfg.get("input_dim", 0)) or 1
     m = tf.keras.Sequential([
         tf.keras.layers.Input(shape=(input_dim,)),
         tf.keras.layers.Dense(128, activation="relu"),
         tf.keras.layers.Dense(64, activation="relu"),
-        tf.keras.layers.Dense(nclass, activation="softmax"),
+        tf.keras.layers.Dense(output_dim, activation="linear"),
     ])
     return m
 
+
 def compile_model(m, lr=0.01):
-    m.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=lr, momentum=0.0),
-              loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+    # Stabilize training via optional gradient clipping and optimizer choice.
+    opt_name = os.getenv("OPTIMIZER", "sgd").strip().lower()
+    clip_norm = float(os.getenv("CLIP_NORM", "1.0"))
+    if opt_name == "adam":
+        opt = tf.keras.optimizers.Adam(learning_rate=lr, clipnorm=clip_norm)
+    else:
+        opt = tf.keras.optimizers.SGD(learning_rate=lr, momentum=0.0, clipnorm=clip_norm)
+
+    m.compile(
+        optimizer=opt,
+        loss="mse",
+        metrics=[
+            tf.keras.metrics.MeanAbsoluteError(name="mae"),
+            tf.keras.metrics.RootMeanSquaredError(name="rmse"),
+        ],
+    )
 
 def get_weights_vector(model):
     # flatten all weights to a single 1D float32 array

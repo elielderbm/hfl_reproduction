@@ -1,12 +1,14 @@
-import os, asyncio, json, time, numpy as np, random
+import os, asyncio, json, time, numpy as np, random, re
 from collections import defaultdict
 from project.common.messaging import ws_server
 from project.common.crypto import decrypt
 from project.common.model import build_model, compile_model, get_weights_vector, set_weights_vector
 from project.common.logging_utils import log_event, log_metric
+from project.common.metrics import score_from_rmse, regression_metrics
 from project.common.config import load_hparams
-from project.common.data_utils import load_global_test
+from project.common.data_utils import load_global_test, load_global_test_by_target
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
+from pathlib import Path
 
 PORT = 9000
 GLOBAL_SEED = int(os.getenv("GLOBAL_SEED","42"))
@@ -22,6 +24,10 @@ round_ctr = 0
 eval_model = None
 X_test = None
 y_test = None
+X_test_by_target = {}
+SAVE_WEIGHTS = os.getenv("SAVE_GLOBAL_WEIGHTS", "0") == "1"
+SAVE_EVERY = int(os.getenv("SAVE_GLOBAL_WEIGHTS_EVERY", "1"))
+WEIGHTS_DIR = Path(os.getenv("WEIGHTS_DIR", "/workspace/outputs/weights"))
 
 # Conexões ativas
 peers = {}  # edge_id -> websocket
@@ -34,7 +40,7 @@ def edge_key_for(edge_id):
     return os.getenv("EDGE_KEY_HEX","00112233445566778899AABBCCDDEEFF")
 
 async def handler(ws, path):
-    global w_global, round_ctr, peers, eval_model, X_test, y_test
+    global w_global, round_ctr, peers, eval_model, X_test, y_test, X_test_by_target
 
     try:
         hello_raw = await ws.recv()
@@ -122,13 +128,50 @@ async def handler(ws, path):
             round_ctr += 1
 
             # Avaliação global no conjunto de teste
-            global_acc = None
             global_loss = None
+            global_mae = None
+            global_rmse = None
+            global_r2 = None
+            global_mape = None
+            global_score = None
             if X_test is not None and len(y_test) > 0:
                 set_weights_vector(eval_model, w_global)
-                global_loss, global_acc = eval_model.evaluate(X_test, y_test, verbose=0)
-                global_acc = float(global_acc)
-                global_loss = float(global_loss)
+                try:
+                    preds = eval_model.predict(X_test, verbose=0).reshape(-1)
+                except Exception:
+                    preds = None
+                if preds is not None and np.isfinite(preds).all():
+                    global_loss, global_mae, global_rmse, global_r2, global_mape = regression_metrics(y_test, preds)
+                    global_score = score_from_rmse(global_rmse)
+
+            # Avaliação por target (temp vs humidity, etc.)
+            target_metrics = {}
+            if X_test_by_target:
+                for target, (Xt, yt) in X_test_by_target.items():
+                    if yt is None or len(yt) == 0:
+                        continue
+                    try:
+                        preds_t = eval_model.predict(Xt, verbose=0).reshape(-1)
+                    except Exception:
+                        continue
+                    if not np.isfinite(preds_t).all():
+                        continue
+                    t_loss, t_mae, t_rmse, t_r2, t_mape = regression_metrics(yt, preds_t)
+                    t_score = score_from_rmse(t_rmse)
+                    key = re.sub(r"[^a-zA-Z0-9]+", "_", str(target).strip().lower()).strip("_")
+                    target_metrics[f"global_{key}_rmse"] = t_rmse
+                    target_metrics[f"global_{key}_mae"] = t_mae
+                    target_metrics[f"global_{key}_r2"] = t_r2
+                    target_metrics[f"global_{key}_mape"] = t_mape
+                    target_metrics[f"global_{key}_score"] = t_score
+
+            # Persistir pesos globais (opcional)
+            if SAVE_WEIGHTS and round_ctr % max(1, SAVE_EVERY) == 0:
+                try:
+                    WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+                    np.save(WEIGHTS_DIR / f"cloud_round_{round_ctr:04d}.npy", w_global.astype("float32"))
+                except Exception as e:
+                    print(f"[cloud] falha salvando pesos: {e}")
 
             # 🔹 Broadcast do modelo para todos os edges
             dead = []
@@ -152,10 +195,15 @@ async def handler(ws, path):
                 round=round_ctr,
                 edges=len(handler.edge_last),
                 beta_cloud=beta_cloud,
-                global_acc=global_acc,
                 global_loss=global_loss,
+                global_mae=global_mae,
+                global_rmse=global_rmse,
+                global_r2=global_r2,
+                global_mape=global_mape,
+                global_score=global_score,
                 dec_ms=dec_ms,
                 payload_bytes=msg.get("payload_bytes"),
+                **target_metrics,
             )
 
     finally:
@@ -163,13 +211,14 @@ async def handler(ws, path):
         peers.pop(edge, None)
 
 async def main():
-    global w_global, eval_model, X_test, y_test
+    global w_global, eval_model, X_test, y_test, X_test_by_target
     tmp = build_model()
     compile_model(tmp, lr=hp["eta"])
     w_global = get_weights_vector(tmp).copy()
     eval_model = build_model()
     compile_model(eval_model, lr=hp["eta"])
     X_test, y_test = load_global_test()
+    X_test_by_target = load_global_test_by_target()
     log_event("cloud", event="start", port=PORT)
     print(f"[cloud] iniciado na porta {PORT}, pesos iniciais n={w_global.size}")
     await ws_server("0.0.0.0", PORT, handler)

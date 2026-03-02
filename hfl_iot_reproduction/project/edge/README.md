@@ -3,6 +3,7 @@
 - Recebe atualizações dos IoTs conectados (WebSocket :8765).
 - **Janela deslizante adaptativa**: `window = window + alpha_sw * (pdesired - pactual)`.
 - Agregação: `w_e = (alpha_edge * w_e + beta_edge * sum(w_i)) / (alpha_edge + beta_edge*|A|)`.
+- Estima qualidade `q_current` a partir do **score** reportado pelos IoTs.
 - Envia modelo agregado (criptografado Salsa20) para a **Cloud** e recebe global + *feedback*.
 - Baseline síncrono (HierFAVG): defina `SYNC_MODE=1` e `EDGE_CLIENTS=iot1,iot2` (ou `iot3,iot4`) para o edge esperar todos os clientes por round.
 

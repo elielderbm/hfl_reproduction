@@ -19,12 +19,16 @@ class Summary:
     rounds_iot: int | None
     rounds_cloud: int | None
     duration_s: float | None
-    local_acc_last_mean: float | None
-    local_acc_best_mean: float | None
-    local_loss_last_mean: float | None
-    global_acc_last: float | None
-    global_acc_best: float | None
-    global_loss_last: float | None
+    local_score_last_mean: float | None
+    local_score_best_mean: float | None
+    local_error_last_mean: float | None
+    local_r2_last_mean: float | None
+    local_mape_last_mean: float | None
+    global_score_last: float | None
+    global_score_best: float | None
+    global_rmse_last: float | None
+    global_r2_last: float | None
+    global_mape_last: float | None
     round_time_s_mean: float | None
     round_time_s_p90: float | None
     throughput_kbps_mean: float | None
@@ -54,9 +58,14 @@ def _last(series: pd.Series) -> float | None:
     return float(s.iloc[-1]) if not s.empty else None
 
 
-def _best(series: pd.Series) -> float | None:
+def _best_high(series: pd.Series) -> float | None:
     s = _safe(series)
     return float(s.max()) if not s.empty else None
+
+
+def _best_low(series: pd.Series) -> float | None:
+    s = _safe(series)
+    return float(s.min()) if not s.empty else None
 
 
 def _p90(series: pd.Series) -> float | None:
@@ -112,26 +121,67 @@ def _load_metrics(metrics_dir: Path) -> pd.DataFrame:
     return pd.read_csv(csv)
 
 
+def _pick_cols(iot: pd.DataFrame):
+    score_col = None
+    error_col = None
+    r2_col = None
+    mape_col = None
+    if "train_score" in iot.columns:
+        score_col = "train_score"
+    elif "train_acc" in iot.columns:
+        score_col = "train_acc"
+    elif "val_score" in iot.columns:
+        score_col = "val_score"
+    elif "val_acc" in iot.columns:
+        score_col = "val_acc"
+
+    if "train_rmse" in iot.columns:
+        error_col = "train_rmse"
+    elif "train_loss" in iot.columns:
+        error_col = "train_loss"
+    elif "val_rmse" in iot.columns:
+        error_col = "val_rmse"
+    elif "val_loss" in iot.columns:
+        error_col = "val_loss"
+    if "train_r2" in iot.columns:
+        r2_col = "train_r2"
+    elif "val_r2" in iot.columns:
+        r2_col = "val_r2"
+    if "train_mape" in iot.columns:
+        mape_col = "train_mape"
+    elif "val_mape" in iot.columns:
+        mape_col = "val_mape"
+    return score_col, error_col, r2_col, mape_col
+
+
 def compute_summary(df: pd.DataFrame, pdesired: float | None = None) -> Summary:
     metrics = df[df["type"] == "metric"].copy()
     iot = metrics[metrics["file"].str.startswith("iot")].copy()
     edge = metrics[metrics["file"].str.startswith("edge")].copy()
     cloud = metrics[metrics["file"].str.startswith("cloud")].copy()
 
-    acc_col = "train_acc" if "train_acc" in iot.columns else "val_acc"
-    loss_col = "train_loss" if "train_loss" in iot.columns else "val_loss"
+    score_col, error_col, r2_col, mape_col = _pick_cols(iot)
 
     local_last = None
     local_best = None
-    local_loss_last = None
-    if not iot.empty and "round" in iot.columns:
+    local_error_last = None
+    local_r2_last = None
+    local_mape_last = None
+    if not iot.empty and "round" in iot.columns and score_col:
         g = iot.sort_values("round").groupby("iot")
-        local_last = _mean(g[acc_col].last()) if acc_col in iot.columns else None
-        local_best = _mean(g[acc_col].max()) if acc_col in iot.columns else None
-        local_loss_last = _mean(g[loss_col].last()) if loss_col in iot.columns else None
+        local_last = _mean(g[score_col].last())
+        local_best = _mean(g[score_col].max())
+        if error_col:
+            local_error_last = _mean(g[error_col].last())
+        if r2_col:
+            local_r2_last = _mean(g[r2_col].last())
+        if mape_col:
+            local_mape_last = _mean(g[mape_col].last())
 
-    global_acc = cloud["global_acc"] if "global_acc" in cloud.columns else pd.Series(dtype=float)
-    global_loss = cloud["global_loss"] if "global_loss" in cloud.columns else pd.Series(dtype=float)
+    global_score = cloud["global_score"] if "global_score" in cloud.columns else pd.Series(dtype=float)
+    global_rmse = cloud["global_rmse"] if "global_rmse" in cloud.columns else pd.Series(dtype=float)
+    global_r2 = cloud["global_r2"] if "global_r2" in cloud.columns else pd.Series(dtype=float)
+    global_mape = cloud["global_mape"] if "global_mape" in cloud.columns else pd.Series(dtype=float)
 
     round_time_s = pd.Series(dtype=float)
     if not cloud.empty and "_ts" in cloud.columns:
@@ -167,12 +217,16 @@ def compute_summary(df: pd.DataFrame, pdesired: float | None = None) -> Summary:
         rounds_iot=int(iot["round"].max()) if "round" in iot.columns and not iot.empty else None,
         rounds_cloud=int(cloud["round"].max()) if "round" in cloud.columns and not cloud.empty else None,
         duration_s=duration_s,
-        local_acc_last_mean=local_last,
-        local_acc_best_mean=local_best,
-        local_loss_last_mean=local_loss_last,
-        global_acc_last=_last(global_acc),
-        global_acc_best=_best(global_acc),
-        global_loss_last=_last(global_loss),
+        local_score_last_mean=local_last,
+        local_score_best_mean=local_best,
+        local_error_last_mean=local_error_last,
+        local_r2_last_mean=local_r2_last,
+        local_mape_last_mean=local_mape_last,
+        global_score_last=_last(global_score),
+        global_score_best=_best_high(global_score),
+        global_rmse_last=_last(global_rmse),
+        global_r2_last=_last(global_r2),
+        global_mape_last=_last(global_mape),
         round_time_s_mean=_mean(round_time_s),
         round_time_s_p90=_p90(round_time_s),
         throughput_kbps_mean=_mean(throughput),
@@ -204,18 +258,20 @@ def main():
     edge = metrics[metrics["file"].str.startswith("edge")].copy()
     cloud = metrics[metrics["file"].str.startswith("cloud")].copy()
 
-    global_acc = cloud["global_acc"] if "global_acc" in cloud.columns else pd.Series(dtype=float)
+    global_score = cloud["global_score"] if "global_score" in cloud.columns else pd.Series(dtype=float)
     rounds = cloud["round"] if "round" in cloud.columns else pd.Series(dtype=float)
 
-    best_global = _best(global_acc)
-    t90 = _time_to_threshold(rounds, global_acc, 0.9 * best_global) if best_global else None
-    early = _mean(global_acc.head(10)) if not global_acc.empty else None
-    late = _mean(global_acc.tail(10)) if not global_acc.empty else None
-    stability = float(global_acc.tail(10).std()) if len(global_acc) >= 10 else None
-    global_trend = _trend(rounds, global_acc)
+    best_global = _best_high(global_score)
+    t90 = _time_to_threshold(rounds, global_score, 0.9 * best_global) if best_global else None
+    early = _mean(global_score.head(10)) if not global_score.empty else None
+    late = _mean(global_score.tail(10)) if not global_score.empty else None
+    stability = float(global_score.tail(10).std()) if len(global_score) >= 10 else None
+    global_trend = _trend(rounds, global_score)
+
+    score_col, _, _, _ = _pick_cols(iot)
     local_trend = _trend(
         iot["round"] if "round" in iot.columns else pd.Series(dtype=float),
-        iot["train_acc"] if "train_acc" in iot.columns else iot.get("val_acc", pd.Series(dtype=float)),
+        iot[score_col] if score_col in iot.columns else pd.Series(dtype=float),
     )
 
     overhead_ratio = None
@@ -242,11 +298,16 @@ def main():
     report.append("## Paper Metrics (Comparable)")
     report.append("| Metric | Value |")
     report.append("| --- | --- |")
-    report.append(f"| Local Acc (last, mean) | {summary.local_acc_last_mean:.4f} |" if summary.local_acc_last_mean is not None else "| Local Acc (last, mean) | n/a |")
-    report.append(f"| Local Acc (best, mean) | {summary.local_acc_best_mean:.4f} |" if summary.local_acc_best_mean is not None else "| Local Acc (best, mean) | n/a |")
-    report.append(f"| Local Loss (last, mean) | {summary.local_loss_last_mean:.4f} |" if summary.local_loss_last_mean is not None else "| Local Loss (last, mean) | n/a |")
-    report.append(f"| Global Acc (last) | {summary.global_acc_last:.4f} |" if summary.global_acc_last is not None else "| Global Acc (last) | n/a |")
-    report.append(f"| Global Acc (best) | {summary.global_acc_best:.4f} |" if summary.global_acc_best is not None else "| Global Acc (best) | n/a |")
+    report.append(f"| Local Score (last, mean) | {summary.local_score_last_mean:.4f} |" if summary.local_score_last_mean is not None else "| Local Score (last, mean) | n/a |")
+    report.append(f"| Local Score (best, mean) | {summary.local_score_best_mean:.4f} |" if summary.local_score_best_mean is not None else "| Local Score (best, mean) | n/a |")
+    report.append(f"| Local Error (last, mean) | {summary.local_error_last_mean:.4f} |" if summary.local_error_last_mean is not None else "| Local Error (last, mean) | n/a |")
+    report.append(f"| Local R2 (last, mean) | {summary.local_r2_last_mean:.4f} |" if summary.local_r2_last_mean is not None else "| Local R2 (last, mean) | n/a |")
+    report.append(f"| Local MAPE (last, mean) | {summary.local_mape_last_mean:.4f} |" if summary.local_mape_last_mean is not None else "| Local MAPE (last, mean) | n/a |")
+    report.append(f"| Global Score (last) | {summary.global_score_last:.4f} |" if summary.global_score_last is not None else "| Global Score (last) | n/a |")
+    report.append(f"| Global Score (best) | {summary.global_score_best:.4f} |" if summary.global_score_best is not None else "| Global Score (best) | n/a |")
+    report.append(f"| Global RMSE (last) | {summary.global_rmse_last:.4f} |" if summary.global_rmse_last is not None else "| Global RMSE (last) | n/a |")
+    report.append(f"| Global R2 (last) | {summary.global_r2_last:.4f} |" if summary.global_r2_last is not None else "| Global R2 (last) | n/a |")
+    report.append(f"| Global MAPE (last) | {summary.global_mape_last:.4f} |" if summary.global_mape_last is not None else "| Global MAPE (last) | n/a |")
     report.append(f"| Round Time (mean, s) | {summary.round_time_s_mean:.3f} |" if summary.round_time_s_mean is not None else "| Round Time (mean, s) | n/a |")
     report.append(f"| Round Time (p90, s) | {summary.round_time_s_p90:.3f} |" if summary.round_time_s_p90 is not None else "| Round Time (p90, s) | n/a |")
     report.append(f"| Throughput (KB/s, mean) | {summary.throughput_kbps_mean:.2f} |" if summary.throughput_kbps_mean is not None else "| Throughput (KB/s, mean) | n/a |")
@@ -259,11 +320,11 @@ def main():
 
     report.append("## Dynamic Analysis")
     if best_global is not None:
-        report.append(f"- Time-to-90% of best global acc: round {t90}" if t90 is not None else "- Time-to-90% of best global acc: n/a")
-        report.append(f"- Early vs late global acc (first 10 → last 10): {early:.4f} → {late:.4f}" if early is not None and late is not None else "- Early vs late global acc: n/a")
-        report.append(f"- Stability (std of last 10 global acc): {stability:.4f}" if stability is not None else "- Stability: n/a")
-        report.append(f"- Global acc trend (slope per round): {global_trend:.6f}" if global_trend is not None else "- Global acc trend: n/a")
-    report.append(f"- Local acc trend (slope per round): {local_trend:.6f}" if local_trend is not None else "- Local acc trend: n/a")
+        report.append(f"- Time-to-90% of best global score: round {t90}" if t90 is not None else "- Time-to-90% of best global score: n/a")
+        report.append(f"- Early vs late global score (first 10 → last 10): {early:.4f} → {late:.4f}" if early is not None and late is not None else "- Early vs late global score: n/a")
+        report.append(f"- Stability (std of last 10 global score): {stability:.4f}" if stability is not None else "- Stability: n/a")
+        report.append(f"- Global score trend (slope per round): {global_trend:.6f}" if global_trend is not None else "- Global score trend: n/a")
+    report.append(f"- Local score trend (slope per round): {local_trend:.6f}" if local_trend is not None else "- Local score trend: n/a")
 
     if summary.pactual_mean is not None:
         report.append(f"- Participation: pactual mean = {summary.pactual_mean:.3f}" + (f", pdesired = {summary.pdesired:.3f}" if summary.pdesired is not None else ""))
@@ -272,24 +333,22 @@ def main():
     report.append("")
 
     report.append("## Paper-Style Interpretation")
-    report.append("- The async edge aggregation reduces round time while keeping global accuracy aligned with local convergence, matching the paper’s efficiency-first claim.")
+    report.append("- The async edge aggregation reduces round time while keeping global score aligned with local convergence, matching the paper’s efficiency-first claim.")
     report.append("- Sliding window adaptation reflects participation dynamics; drift toward smaller windows suggests frequent arrivals (pactual near 1.0).")
     report.append("- Salsa20 overhead remains small relative to round time, consistent with the paper’s overhead analysis.")
 
     if hetero:
         report.append("")
-        report.append("## Data Heterogeneity (HAR)")
-        ent = hetero.get("entropy", {})
-        if ent:
-            ent_vals = [v for v in ent.values() if isinstance(v, (int, float))]
-            if ent_vals:
-                report.append(f"- Entropy range: {min(ent_vals):.4f} → {max(ent_vals):.4f}")
-        js = hetero.get("js", {})
-        emd = hetero.get("emd", {})
-        if js:
-            report.append(f"- JS Divergence mean/min/max: {js.get('mean'):.4f} / {js.get('min'):.4f} / {js.get('max'):.4f}")
-        if emd:
-            report.append(f"- EMD mean/min/max: {emd.get('mean'):.4f} / {emd.get('min'):.4f} / {emd.get('max'):.4f}")
+        report.append("## Data Heterogeneity (Intel Lab)")
+        by_target = hetero.get("by_target", {})
+        for target, stats in by_target.items():
+            report.append(f"- Target `{target}`: bins={stats.get('bins')}, range={stats.get('range')}")
+            js = stats.get("js", {})
+            emd = stats.get("emd", {})
+            if js:
+                report.append(f"  - JS Divergence mean/min/max: {js.get('mean')} / {js.get('min')} / {js.get('max')}")
+            if emd:
+                report.append(f"  - EMD mean/min/max: {emd.get('mean')} / {emd.get('min')} / {emd.get('max')}")
 
     if args.compare_dir:
         compare_base = Path(args.compare_dir)
@@ -311,9 +370,18 @@ def main():
             if summary.throughput_kbps_mean and sync_summary.throughput_kbps_mean:
                 delta = 100.0 * (summary.throughput_kbps_mean - sync_summary.throughput_kbps_mean) / sync_summary.throughput_kbps_mean
                 report.append(f"| Throughput (KB/s) | {summary.throughput_kbps_mean:.2f} | {sync_summary.throughput_kbps_mean:.2f} | {delta:+.2f}% |")
-            if summary.global_acc_last and sync_summary.global_acc_last:
-                delta = summary.global_acc_last - sync_summary.global_acc_last
-                report.append(f"| Global Acc (last) | {summary.global_acc_last:.4f} | {sync_summary.global_acc_last:.4f} | {delta:+.4f} |")
+            if summary.global_score_last and sync_summary.global_score_last:
+                delta = summary.global_score_last - sync_summary.global_score_last
+                report.append(f"| Global Score (last) | {summary.global_score_last:.4f} | {sync_summary.global_score_last:.4f} | {delta:+.4f} |")
+            if summary.global_rmse_last and sync_summary.global_rmse_last:
+                delta = summary.global_rmse_last - sync_summary.global_rmse_last
+                report.append(f"| Global RMSE (last) | {summary.global_rmse_last:.4f} | {sync_summary.global_rmse_last:.4f} | {delta:+.4f} |")
+            if summary.global_r2_last and sync_summary.global_r2_last:
+                delta = summary.global_r2_last - sync_summary.global_r2_last
+                report.append(f"| Global R2 (last) | {summary.global_r2_last:.4f} | {sync_summary.global_r2_last:.4f} | {delta:+.4f} |")
+            if summary.global_mape_last and sync_summary.global_mape_last:
+                delta = summary.global_mape_last - sync_summary.global_mape_last
+                report.append(f"| Global MAPE (last) | {summary.global_mape_last:.4f} | {sync_summary.global_mape_last:.4f} | {delta:+.4f} |")
             if summary.enc_ms_mean and sync_summary.enc_ms_mean:
                 delta = summary.enc_ms_mean - sync_summary.enc_ms_mean
                 report.append(f"| Encrypt Overhead (ms) | {summary.enc_ms_mean:.2f} | {sync_summary.enc_ms_mean:.2f} | {delta:+.2f} |")

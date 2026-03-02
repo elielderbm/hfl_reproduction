@@ -5,10 +5,49 @@ from project.analysis.paths import OUT
 
 CSV = OUT / "metrics_all.csv"
 
+
 def _write_csv_replace(df: pd.DataFrame, target, index: bool = True):
     tmp = target.with_suffix(target.suffix + ".tmp")
     df.to_csv(tmp, index=index)
     tmp.replace(target)
+
+
+def _pick_cols(df: pd.DataFrame):
+    score_col = None
+    error_col = None
+    r2_col = None
+    mape_col = None
+
+    if "train_score" in df.columns:
+        score_col = "train_score"
+    elif "train_acc" in df.columns:
+        score_col = "train_acc"
+    elif "val_score" in df.columns:
+        score_col = "val_score"
+    elif "val_acc" in df.columns:
+        score_col = "val_acc"
+
+    if "train_rmse" in df.columns:
+        error_col = "train_rmse"
+    elif "train_loss" in df.columns:
+        error_col = "train_loss"
+    elif "val_rmse" in df.columns:
+        error_col = "val_rmse"
+    elif "val_loss" in df.columns:
+        error_col = "val_loss"
+
+    if "train_r2" in df.columns:
+        r2_col = "train_r2"
+    elif "val_r2" in df.columns:
+        r2_col = "val_r2"
+
+    if "train_mape" in df.columns:
+        mape_col = "train_mape"
+    elif "val_mape" in df.columns:
+        mape_col = "val_mape"
+
+    return score_col, error_col, r2_col, mape_col
+
 
 def main():
     if not CSV.exists():
@@ -20,20 +59,31 @@ def main():
     # IoT summary
     iot = df[(df["type"] == "metric") & (df["file"].str.startswith("iot"))].copy()
     if not iot.empty:
-        acc_col = "train_acc" if "train_acc" in iot.columns else "val_acc"
-        loss_col = "train_loss" if "train_loss" in iot.columns else "val_loss"
+        score_col, error_col, r2_col, mape_col = _pick_cols(iot)
         rows = []
         for iot_id, sub in iot.groupby("iot"):
             sub = sub.sort_values("round")
+            rounds = int(sub["round"].max()) if "round" in sub.columns else len(sub)
+
+            score = sub[score_col].dropna() if score_col in sub.columns else pd.Series(dtype=float)
+            error = sub[error_col].dropna() if error_col in sub.columns else pd.Series(dtype=float)
+            r2 = sub[r2_col].dropna() if r2_col and r2_col in sub.columns else pd.Series(dtype=float)
+            mape = sub[mape_col].dropna() if mape_col and mape_col in sub.columns else pd.Series(dtype=float)
+
             rows.append(
                 {
                     "iot": iot_id,
-                    "rounds": int(sub["round"].max()) if "round" in sub.columns else len(sub),
-                    "acc_mean": float(sub[acc_col].mean()) if acc_col in sub.columns else None,
-                    "acc_first": float(sub[acc_col].dropna().iloc[0]) if acc_col in sub.columns and sub[acc_col].notna().any() else None,
-                    "acc_last": float(sub[acc_col].dropna().iloc[-1]) if acc_col in sub.columns and sub[acc_col].notna().any() else None,
-                    "acc_best": float(sub[acc_col].max()) if acc_col in sub.columns else None,
-                    "loss_last": float(sub[loss_col].dropna().iloc[-1]) if loss_col in sub.columns and sub[loss_col].notna().any() else None,
+                    "rounds": rounds,
+                    "score_mean": float(score.mean()) if len(score) else None,
+                    "score_first": float(score.iloc[0]) if len(score) else None,
+                    "score_last": float(score.iloc[-1]) if len(score) else None,
+                    "score_best": float(score.max()) if len(score) else None,
+                    "error_last": float(error.iloc[-1]) if len(error) else None,
+                    "error_best": float(error.min()) if len(error) else None,
+                    "r2_last": float(r2.iloc[-1]) if len(r2) else None,
+                    "r2_best": float(r2.max()) if len(r2) else None,
+                    "mape_last": float(mape.iloc[-1]) if len(mape) else None,
+                    "mape_best": float(mape.min()) if len(mape) else None,
                 }
             )
         g = pd.DataFrame(rows).set_index("iot").sort_index()
@@ -87,8 +137,11 @@ def main():
             "edges_min": float(cloud["edges"].min()) if "edges" in cloud.columns and cloud["edges"].notna().any() else None,
             "edges_max": float(cloud["edges"].max()) if "edges" in cloud.columns and cloud["edges"].notna().any() else None,
             "beta_cloud_mode": float(cloud["beta_cloud"].dropna().mode().iloc[0]) if "beta_cloud" in cloud.columns and cloud["beta_cloud"].notna().any() else None,
-            "global_acc_last": float(cloud["global_acc"].dropna().iloc[-1]) if "global_acc" in cloud.columns and cloud["global_acc"].notna().any() else None,
-            "global_acc_best": float(cloud["global_acc"].max()) if "global_acc" in cloud.columns else None,
+            "global_score_last": float(cloud["global_score"].dropna().iloc[-1]) if "global_score" in cloud.columns and cloud["global_score"].notna().any() else None,
+            "global_score_best": float(cloud["global_score"].max()) if "global_score" in cloud.columns else None,
+            "global_rmse_last": float(cloud["global_rmse"].dropna().iloc[-1]) if "global_rmse" in cloud.columns and cloud["global_rmse"].notna().any() else None,
+            "global_r2_last": float(cloud["global_r2"].dropna().iloc[-1]) if "global_r2" in cloud.columns and cloud["global_r2"].notna().any() else None,
+            "global_mape_last": float(cloud["global_mape"].dropna().iloc[-1]) if "global_mape" in cloud.columns and cloud["global_mape"].notna().any() else None,
         }
         g = pd.DataFrame([row])
         print("\n== Cloud Summary ==")
@@ -97,6 +150,7 @@ def main():
 
     report_path = generate_results_explanation(df)
     print(f"\n[analysis] wrote {report_path}")
+
 
 if __name__ == "__main__":
     main()

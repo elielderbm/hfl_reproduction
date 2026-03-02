@@ -1,5 +1,6 @@
-# Mapeia IoT -> subject_id (HAR tem sujeitos de 1..30)
-iot1: 1
-iot2: 2
-iot3: 3
-iot4: 4
+# Mapeia IoT -> mote_id (Intel Lab Sensor Data).
+# Use "auto" para selecionar automaticamente os 4 motes com mais leituras válidas.
+iot1: auto
+iot2: auto
+iot3: auto
+iot4: auto

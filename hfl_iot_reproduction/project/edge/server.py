@@ -5,6 +5,7 @@ from project.common.messaging import ws_server, ws_connect, b64d
 from project.common.crypto import encrypt, decrypt
 from project.common.model import build_model, compile_model, get_weights_vector, set_weights_vector
 from project.common.logging_utils import log_event, log_metric
+from project.common.metrics import score_from_rmse
 from project.common.config import load_hparams
 
 EDGE_ID = os.getenv("EDGE_ID","edge1")
@@ -35,9 +36,9 @@ ve_feedback = 1.0
 last_agg_ts = 0.0
 
 # Buffers
-updates = deque()  # (ts, iot, round, w, train_acc, train_loss, dec_ms, payload_bytes)
+updates = deque()  # (ts, iot, round, w, train_score, train_loss, dec_ms, payload_bytes)
 pending_by_round = {}
-iot_train_acc = {}
+iot_train_score = {}
 
 
 def _parse_q_fixed(raw):
@@ -128,20 +129,20 @@ async def cloud_loop():
 
                     agg_start = time.time()
                     sum_w = np.zeros_like(w_edge, dtype=np.float32)
-                    accs = []
+                    scores = []
                     dec_ms_vals = []
                     payload_bytes = 0
-                    for (_ts, _iot, _r, _w, _acc, _loss, _dec_ms, _bytes) in A:
+                    for (_ts, _iot, _r, _w, _score, _loss, _dec_ms, _bytes) in A:
                         sum_w += _w
-                        if _acc is not None:
-                            accs.append(float(_acc))
+                        if _score is not None:
+                            scores.append(float(_score))
                         if _dec_ms is not None:
                             dec_ms_vals.append(float(_dec_ms))
                         if _bytes is not None:
                             payload_bytes += int(_bytes)
 
                     # Estimativa de qualidade (q_current)
-                    qcurrent = float(np.mean(accs)) if accs else 1.0
+                    qcurrent = float(np.mean(scores)) if scores else 1.0
                     if Q_FIXED is not None:
                         qedge = float(Q_FIXED)
                     else:
@@ -250,22 +251,31 @@ async def iot_handler(ws, path):
                 print(f"[edge:{EDGE_ID}] update inválido de {iot}: shape={w.shape} esperado={w_edge.shape} (descartado)")
                 continue
 
-            train_acc = M.get("train_acc")
+            train_score = M.get("train_score")
             train_loss = M.get("train_loss")
-            if train_acc is None:
-                train_acc = M.get("val_acc")
+            train_rmse = M.get("train_rmse")
+            if train_score is None and train_rmse is not None:
+                train_score = score_from_rmse(float(train_rmse))
+            if train_score is None and train_loss is not None:
+                # fallback: RMSE ~ sqrt(MSE)
+                try:
+                    train_score = score_from_rmse(float(train_loss) ** 0.5)
+                except Exception:
+                    train_score = None
+            if train_score is None:
+                train_score = M.get("val_score") or M.get("train_acc") or M.get("val_acc")
             if train_loss is None:
                 train_loss = M.get("val_loss")
             clients.add(iot)
-            item = (time.time(), iot, r, w, train_acc, train_loss, dec_ms, M.get("payload_bytes"))
+            item = (time.time(), iot, r, w, train_score, train_loss, dec_ms, M.get("payload_bytes"))
             if SYNC_MODE:
                 bucket = pending_by_round.setdefault(r, {})
                 bucket[iot] = item
             else:
                 updates.append(item)
-            iot_train_acc[iot] = train_acc
-            if train_acc is not None:
-                print(f"[edge:{EDGE_ID}] update recebido de {iot}, round={r}, train_acc={float(train_acc):.3f}")
+            iot_train_score[iot] = train_score
+            if train_score is not None:
+                print(f"[edge:{EDGE_ID}] update recebido de {iot}, round={r}, train_score={float(train_score):.3f}")
             else:
                 print(f"[edge:{EDGE_ID}] update recebido de {iot}, round={r}")
             # Envia imediatamente o modelo do edge (pode estar "stale", pois é assíncrono)
