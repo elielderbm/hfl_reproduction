@@ -29,7 +29,7 @@ META_PATH = DATA_DIR / "meta.json"
 RESOLVED_CLIENTS_PATH = DATA_DIR / "clients_resolved.yml"
 SCALER_PATH = DATA_DIR / "scaler.json"
 
-IOT_IDS = ["iot1", "iot2", "iot3", "iot4"]
+IOT_IDS = ["iot1", "iot2", "iot3", "iot4", "iot5", "iot6"]
 
 VALID_RANGES = {
     "temp": (-40.0, 80.0),
@@ -179,30 +179,75 @@ def _scale_features(train_sets, val_sets, test_sets, method: str):
     return _apply(train_sets), _apply(val_sets), _apply(test_sets), {"mean": mean, "std": std}
 
 
-def _scale_targets(train_sets, val_sets, test_sets):
-    ytr_all = [y for (_, y) in train_sets if y.size > 0]
-    if not ytr_all:
+def _scale_targets(train_sets, val_sets, test_sets, targets_by_iot, tasks_by_target):
+    # Escalonamento por target (temp/umidade)
+    by_target = {}
+    for (X, y), target in zip(train_sets, targets_by_iot):
+        if tasks_by_target.get(target, "regression") == "classification":
+            continue
+        if y.size == 0:
+            continue
+        by_target.setdefault(target, []).append(y)
+
+    if not by_target:
         return train_sets, val_sets, test_sets, None
-    ytr = np.concatenate(ytr_all)
-    mean = float(ytr.mean())
-    std = float(ytr.std()) if float(ytr.std()) != 0.0 else 1.0
+
+    scalers = {}
+    for target, ys in by_target.items():
+        ytr = np.concatenate(ys)
+        mean = float(ytr.mean())
+        std = float(ytr.std()) if float(ytr.std()) != 0.0 else 1.0
+        scalers[target] = {"mean": mean, "std": std}
 
     def _apply(split_sets):
         out = []
-        for X, y in split_sets:
+        for (X, y), target in zip(split_sets, targets_by_iot):
             if y.size == 0:
                 out.append((X, y))
+                continue
+            if tasks_by_target.get(target, "regression") == "classification":
+                out.append((X, y))
+                continue
+            scaler = scalers.get(target)
+            if scaler is None:
+                out.append((X, y))
             else:
-                out.append((X, (y - mean) / std))
+                out.append((X, (y - scaler["mean"]) / scaler["std"]))
         return out
 
-    return _apply(train_sets), _apply(val_sets), _apply(test_sets), {"mean": mean, "std": std}
+    return _apply(train_sets), _apply(val_sets), _apply(test_sets), scalers
+
+
+def _resolve_threshold(raw, values: np.ndarray) -> float:
+    if values.size == 0:
+        return 0.0
+    if raw is None:
+        return float(np.median(values))
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    s = str(raw).strip().lower()
+    if s in ("median", "mediana"):
+        return float(np.median(values))
+    if s in ("mean", "media"):
+        return float(np.mean(values))
+    try:
+        return float(s)
+    except ValueError:
+        return float(np.median(values))
+
+
+def _binarize(y: np.ndarray, threshold: float) -> np.ndarray:
+    if y.size == 0:
+        return y.astype(np.float32)
+    return (y >= threshold).astype(np.float32)
 
 
 def main():
     cfg = load_dataset_config()
     features = cfg["features"]
     targets = cfg["targets"]
+    tasks = cfg.get("tasks", {})
+    classification_cfg = cfg.get("classification", {}) or {}
     window = int(cfg["window_size"])
     delta = int(cfg["delta_steps"])
     splits = cfg.get("splits", {"train": 0.6, "val": 0.2, "test": 0.2})
@@ -230,10 +275,13 @@ def main():
     val_sets = []
     test_sets = []
     per_iot = {}
+    class_targets = {t for t, task in tasks.items() if str(task).strip().lower() == "classification"}
+    class_train_by_target: dict[str, list[np.ndarray]] = {}
 
     for iot in IOT_IDS:
         mote_id = mapping.get(iot)
         target = targets.get(iot, "temp")
+        task = tasks.get(target, "regression")
         if mote_id is None:
             print(f"[data_prep] IoT {iot} sem mote_id definido.")
             X = np.zeros((0, window * len(features)), dtype=np.float32)
@@ -253,14 +301,39 @@ def main():
         train_sets.append((Xtr, ytr))
         val_sets.append((Xv, yv))
         test_sets.append((Xt, yt))
+        if target in class_targets and ytr.size > 0:
+            class_train_by_target.setdefault(target, []).append(ytr)
         per_iot[iot] = {
             "mote_id": mote_id,
             "target": target,
+            "task": str(task).strip().lower(),
             "n_windows": int(len(X)),
             "n_train": int(len(Xtr)),
             "n_val": int(len(Xv)),
             "n_test": int(len(Xt)),
         }
+
+    thresholds = {}
+    for target in class_targets:
+        ys = class_train_by_target.get(target, [])
+        if not ys:
+            continue
+        y_all = np.concatenate(ys)
+        thresh_cfg = (classification_cfg.get(target) or {}).get("threshold", "median")
+        thresholds[target] = _resolve_threshold(thresh_cfg, y_all)
+
+    if thresholds:
+        for i, iot in enumerate(IOT_IDS):
+            target = per_iot[iot]["target"]
+            thr = thresholds.get(target)
+            if thr is None:
+                continue
+            Xtr, ytr = train_sets[i]
+            Xv, yv = val_sets[i]
+            Xt, yt = test_sets[i]
+            train_sets[i] = (Xtr, _binarize(ytr, thr))
+            val_sets[i] = (Xv, _binarize(yv, thr))
+            test_sets[i] = (Xt, _binarize(yt, thr))
 
     # Escalonamento (features)
     train_sets, val_sets, test_sets, scaler = _scale_features(
@@ -268,7 +341,10 @@ def main():
     )
     target_scaler = None
     if scaling.get("with_target"):
-        train_sets, val_sets, test_sets, target_scaler = _scale_targets(train_sets, val_sets, test_sets)
+        targets_by_iot = [per_iot[iot]["target"] for iot in IOT_IDS]
+        train_sets, val_sets, test_sets, target_scaler = _scale_targets(
+            train_sets, val_sets, test_sets, targets_by_iot, tasks
+        )
 
     CLIENTS_DIR.mkdir(parents=True, exist_ok=True)
     for i, iot in enumerate(IOT_IDS):
@@ -299,6 +375,9 @@ def main():
         "delta_steps": delta,
         "features": features,
         "targets": targets,
+        "tasks": tasks,
+        "classification": classification_cfg,
+        "thresholds": thresholds,
         "splits": splits,
         "scaling": scaling,
         "clients": per_iot,
@@ -313,6 +392,8 @@ def main():
             scaler_payload["features"] = {"mean": scaler["mean"].tolist(), "std": scaler["std"].tolist()}
         if target_scaler is not None:
             scaler_payload["target"] = target_scaler
+        if thresholds:
+            scaler_payload["classification"] = {"thresholds": thresholds}
         SCALER_PATH.write_text(json.dumps(scaler_payload, indent=2), encoding="utf-8")
         print(f"[data_prep] Scaler salvo em {SCALER_PATH}")
 

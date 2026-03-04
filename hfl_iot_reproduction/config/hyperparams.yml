@@ -1,7 +1,7 @@
-T: 50             # SIM_ROUNDS
-E: 1              # LOCAL_EPOCHS
-eta: 0.01         # LR
-B: 32             # BATCH_SIZE
+T: 80             # SIM_ROUNDS
+E: 2              # LOCAL_EPOCHS
+eta: 0.001        # LR
+B: 64             # BATCH_SIZE
 
 # Heterogeneidade (delays em segundos ~ N(mu, sigma))
 delay_mu: 0.8
@@ -18,3 +18,13 @@ q_fixed: 1.0      # fixar q_e=1.0 (paper); use null para habilitar q_current
 
 # Cloud
 beta_cloud: 0.5
+
+# Distilação (teacher -> student)
+distill_alpha: 0.2
+
+# Teacher (cloud)
+teacher_epochs: 5
+teacher_batch: 64
+teacher_lr: 0.001
+teacher_max_samples: 0      # 0 = usar todos
+teacher_refresh_every: 0    # 0 = não atualizar durante a simulação

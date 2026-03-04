@@ -69,10 +69,12 @@ def main():
             error = sub[error_col].dropna() if error_col in sub.columns else pd.Series(dtype=float)
             r2 = sub[r2_col].dropna() if r2_col and r2_col in sub.columns else pd.Series(dtype=float)
             mape = sub[mape_col].dropna() if mape_col and mape_col in sub.columns else pd.Series(dtype=float)
+            distill = sub["distill_rmse"].dropna() if "distill_rmse" in sub.columns else pd.Series(dtype=float)
 
             rows.append(
                 {
                     "iot": iot_id,
+                    "target": sub["target"].dropna().iloc[-1] if "target" in sub.columns and sub["target"].notna().any() else None,
                     "rounds": rounds,
                     "score_mean": float(score.mean()) if len(score) else None,
                     "score_first": float(score.iloc[0]) if len(score) else None,
@@ -84,6 +86,8 @@ def main():
                     "r2_best": float(r2.max()) if len(r2) else None,
                     "mape_last": float(mape.iloc[-1]) if len(mape) else None,
                     "mape_best": float(mape.min()) if len(mape) else None,
+                    "distill_rmse_last": float(distill.iloc[-1]) if len(distill) else None,
+                    "distill_rmse_best": float(distill.min()) if len(distill) else None,
                 }
             )
         g = pd.DataFrame(rows).set_index("iot").sort_index()
@@ -107,6 +111,8 @@ def main():
         for edge_id, sub in edge.groupby("edge"):
             sub = sub.sort_values("_ts")
             row = {"edge": edge_id}
+            if "target" in sub.columns and sub["target"].notna().any():
+                row["target"] = sub["target"].dropna().iloc[-1]
             if "window" in sub.columns and sub["window"].notna().any():
                 row["window_start"] = float(sub["window"].dropna().iloc[0])
                 row["window_last"] = float(sub["window"].dropna().iloc[-1])
@@ -119,6 +125,10 @@ def main():
                 row["qcurrent_mean"] = float(sub["qcurrent"].mean())
             if "buf" in sub.columns and sub["buf"].notna().any():
                 row["buf_mean"] = float(sub["buf"].mean())
+            if "edge_ft_rmse" in sub.columns and sub["edge_ft_rmse"].notna().any():
+                row["edge_ft_rmse_last"] = float(sub["edge_ft_rmse"].dropna().iloc[-1])
+            if "edge_ft_score" in sub.columns and sub["edge_ft_score"].notna().any():
+                row["edge_ft_score_last"] = float(sub["edge_ft_score"].dropna().iloc[-1])
             rows.append(row)
 
         g = pd.DataFrame(rows).set_index("edge").sort_index()
@@ -129,21 +139,28 @@ def main():
     # Cloud summary
     cloud = df[(df["type"] == "metric") & (df["file"].str.startswith("cloud"))].copy()
     if not cloud.empty:
-        row = {
-            "rows": len(cloud),
-            "round_min": int(cloud["round"].min()) if "round" in cloud.columns and cloud["round"].notna().any() else None,
-            "round_max": int(cloud["round"].max()) if "round" in cloud.columns and cloud["round"].notna().any() else None,
-            "edges_mean": float(cloud["edges"].mean()) if "edges" in cloud.columns and cloud["edges"].notna().any() else None,
-            "edges_min": float(cloud["edges"].min()) if "edges" in cloud.columns and cloud["edges"].notna().any() else None,
-            "edges_max": float(cloud["edges"].max()) if "edges" in cloud.columns and cloud["edges"].notna().any() else None,
-            "beta_cloud_mode": float(cloud["beta_cloud"].dropna().mode().iloc[0]) if "beta_cloud" in cloud.columns and cloud["beta_cloud"].notna().any() else None,
-            "global_score_last": float(cloud["global_score"].dropna().iloc[-1]) if "global_score" in cloud.columns and cloud["global_score"].notna().any() else None,
-            "global_score_best": float(cloud["global_score"].max()) if "global_score" in cloud.columns else None,
-            "global_rmse_last": float(cloud["global_rmse"].dropna().iloc[-1]) if "global_rmse" in cloud.columns and cloud["global_rmse"].notna().any() else None,
-            "global_r2_last": float(cloud["global_r2"].dropna().iloc[-1]) if "global_r2" in cloud.columns and cloud["global_r2"].notna().any() else None,
-            "global_mape_last": float(cloud["global_mape"].dropna().iloc[-1]) if "global_mape" in cloud.columns and cloud["global_mape"].notna().any() else None,
-        }
-        g = pd.DataFrame([row])
+        rows = []
+        groups = cloud.groupby("target") if "target" in cloud.columns else [("global", cloud)]
+        for target, sub in groups:
+            row = {
+                "target": target,
+                "rows": len(sub),
+                "round_min": int(sub["round"].min()) if "round" in sub.columns and sub["round"].notna().any() else None,
+                "round_max": int(sub["round"].max()) if "round" in sub.columns and sub["round"].notna().any() else None,
+                "edges_mean": float(sub["edges"].mean()) if "edges" in sub.columns and sub["edges"].notna().any() else None,
+                "edges_min": float(sub["edges"].min()) if "edges" in sub.columns and sub["edges"].notna().any() else None,
+                "edges_max": float(sub["edges"].max()) if "edges" in sub.columns and sub["edges"].notna().any() else None,
+                "beta_cloud_mode": float(sub["beta_cloud"].dropna().mode().iloc[0]) if "beta_cloud" in sub.columns and sub["beta_cloud"].notna().any() else None,
+                "global_score_last": float(sub["global_score"].dropna().iloc[-1]) if "global_score" in sub.columns and sub["global_score"].notna().any() else None,
+                "global_score_best": float(sub["global_score"].max()) if "global_score" in sub.columns else None,
+                "global_rmse_last": float(sub["global_rmse"].dropna().iloc[-1]) if "global_rmse" in sub.columns and sub["global_rmse"].notna().any() else None,
+                "global_r2_last": float(sub["global_r2"].dropna().iloc[-1]) if "global_r2" in sub.columns and sub["global_r2"].notna().any() else None,
+                "global_mape_last": float(sub["global_mape"].dropna().iloc[-1]) if "global_mape" in sub.columns and sub["global_mape"].notna().any() else None,
+                "server_ft_rmse_last": float(sub["server_ft_rmse"].dropna().iloc[-1]) if "server_ft_rmse" in sub.columns and sub["server_ft_rmse"].notna().any() else None,
+                "server_ft_score_last": float(sub["server_ft_score"].dropna().iloc[-1]) if "server_ft_score" in sub.columns and sub["server_ft_score"].notna().any() else None,
+            }
+            rows.append(row)
+        g = pd.DataFrame(rows)
         print("\n== Cloud Summary ==")
         print(g.to_string(index=False))
         _write_csv_replace(g, OUT / "cloud_summary.csv", index=False)

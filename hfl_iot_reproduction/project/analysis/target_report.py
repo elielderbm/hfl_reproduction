@@ -9,10 +9,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from project.analysis.paths import OUT, DATA, CONFIG
-from project.common.data_utils import load_client_split
-from project.common.dataset_config import load_dataset_config
+from project.common.data_utils import load_client_split, unscale_target
+from project.common.dataset_config import load_dataset_config, task_for_target
 from project.common.model import build_model, compile_model, set_weights_vector
-from project.common.metrics import regression_metrics, score_from_rmse
+from project.common.metrics import regression_metrics, classification_metrics, score_from_rmse
 
 
 def _slug(name: str) -> str:
@@ -27,15 +27,22 @@ def _save_fig(path: Path):
 
 
 def _load_weights(weights_dir: Path, every: int = 1):
-    files = sorted(weights_dir.glob("cloud_round_*.npy"))
+    files = sorted(weights_dir.glob("cloud_*.npy"))
     for path in files:
-        m = re.search(r"cloud_round_(\d+)", path.stem)
-        if not m:
-            continue
-        round_id = int(m.group(1))
+        stem = path.stem
+        m = re.search(r"cloud_([a-zA-Z0-9_]+)_round_(\\d+)", stem)
+        if m:
+            target = m.group(1)
+            round_id = int(m.group(2))
+        else:
+            m = re.search(r"cloud_round_(\\d+)", stem)
+            if not m:
+                continue
+            target = "global"
+            round_id = int(m.group(1))
         if every > 1 and round_id % every != 0:
             continue
-        yield round_id, path
+        yield round_id, target, path
 
 
 def _build_target_sets(targets_map: dict) -> dict[str, tuple[np.ndarray, np.ndarray]]:
@@ -102,16 +109,40 @@ def main():
         print("[target_report] no target test sets found.")
         return
 
-    model = build_model()
-    compile_model(model, lr=0.01)
+    models = {}
 
     rows = []
-    for round_id, path in _load_weights(weights_dir, every=args.every):
+    for round_id, target, path in _load_weights(weights_dir, every=args.every):
+        if target not in target_sets:
+            continue
         w = np.load(path)
+        task_name = task_for_target(target, cfg)
+        model = models.get(task_name)
+        if model is None:
+            model = build_model(kind="student", task=task_name)
+            compile_model(model, lr=0.01, loss="binary_crossentropy" if task_name == "classification" else "mse", task=task_name)
+            models[task_name] = model
         set_weights_vector(model, w)
-        for target, (Xt, yt) in target_sets.items():
-            preds = model.predict(Xt, verbose=0).reshape(-1)
-            mse, mae, rmse, r2, mape = regression_metrics(yt, preds)
+        Xt, yt = target_sets[target]
+        preds = model.predict(Xt, verbose=0).reshape(-1)
+        if task_name == "classification":
+            m = classification_metrics(yt, preds)
+            rows.append({
+                "round": round_id,
+                "target": target,
+                "rmse": m.get("brier_rmse"),
+                "mae": m.get("mae"),
+                "score": m.get("acc"),
+                "loss": m.get("bce"),
+                "acc": m.get("acc"),
+                "precision": m.get("precision"),
+                "recall": m.get("recall"),
+                "f1": m.get("f1"),
+            })
+        else:
+            yt_u = unscale_target(yt, target)
+            preds_u = unscale_target(preds, target)
+            mse, mae, rmse, r2, mape = regression_metrics(yt_u, preds_u)
             score = score_from_rmse(rmse)
             rows.append({
                 "round": round_id,
@@ -139,8 +170,9 @@ def main():
     lines = []
     lines.append("# Target-Specific Cloud Evaluation")
     lines.append("")
-    lines.append("This report evaluates the **global model** separately on each target (e.g., temp vs humidity).")
+    lines.append("This report evaluates the **global model** separately on each target (e.g., temp vs humidity vs light).")
     lines.append("It uses **saved global weights per round** (enable `SAVE_GLOBAL_WEIGHTS=1`).")
+    lines.append("For multi-target runs, weights are stored as `cloud_<target>_round_XXXX.npy`.")
     lines.append("")
     lines.append("## Summary (per target)")
     lines.append(summary.to_markdown())

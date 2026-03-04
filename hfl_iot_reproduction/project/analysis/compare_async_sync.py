@@ -108,15 +108,27 @@ def _summary(df: pd.DataFrame) -> dict:
         if rows:
             throughput = pd.concat(rows, ignore_index=True)
 
+    if not cloud.empty and "target" in cloud.columns:
+        g_target = cloud.sort_values("round").groupby("target")
+        global_score_last = _mean(g_target["global_score"].last()) if "global_score" in cloud.columns else None
+        global_rmse_last = _mean(g_target["global_rmse"].last()) if "global_rmse" in cloud.columns else None
+        global_r2_last = _mean(g_target["global_r2"].last()) if "global_r2" in cloud.columns else None
+        global_mape_last = _mean(g_target["global_mape"].last()) if "global_mape" in cloud.columns else None
+    else:
+        global_score_last = _last(cloud["global_score"]) if "global_score" in cloud.columns else None
+        global_rmse_last = _last(cloud["global_rmse"]) if "global_rmse" in cloud.columns else None
+        global_r2_last = _last(cloud["global_r2"]) if "global_r2" in cloud.columns else None
+        global_mape_last = _last(cloud["global_mape"]) if "global_mape" in cloud.columns else None
+
     return {
         "local_score_last": local_score_last,
         "local_rmse_last": local_rmse_last,
         "local_r2_last": local_r2_last,
         "local_mape_last": local_mape_last,
-        "global_score_last": _last(cloud["global_score"]) if "global_score" in cloud.columns else None,
-        "global_rmse_last": _last(cloud["global_rmse"]) if "global_rmse" in cloud.columns else None,
-        "global_r2_last": _last(cloud["global_r2"]) if "global_r2" in cloud.columns else None,
-        "global_mape_last": _last(cloud["global_mape"]) if "global_mape" in cloud.columns else None,
+        "global_score_last": global_score_last,
+        "global_rmse_last": global_rmse_last,
+        "global_r2_last": global_r2_last,
+        "global_mape_last": global_mape_last,
         "round_time_s_mean": _mean(round_time_s),
         "throughput_kbps_mean": _mean(throughput),
         "enc_ms_mean": _mean(iot["enc_ms"]) if "enc_ms" in iot.columns else None,

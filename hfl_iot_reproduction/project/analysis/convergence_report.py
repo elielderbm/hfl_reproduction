@@ -79,6 +79,14 @@ def _summarize_iot(df: pd.DataFrame, window: int) -> pd.DataFrame:
         error = sub[error_col].dropna() if error_col and error_col in sub.columns else pd.Series(dtype=float)
         r2 = sub[r2_col].dropna() if r2_col and r2_col in sub.columns else pd.Series(dtype=float)
         mape = sub[mape_col].dropna() if mape_col and mape_col in sub.columns else pd.Series(dtype=float)
+        score_best_round = None
+        error_best_round = None
+        if score_col and score_col in sub.columns and sub[score_col].notna().any():
+            idx = sub[score_col].idxmax()
+            score_best_round = int(sub.loc[idx, "round"]) if "round" in sub.columns else None
+        if error_col and error_col in sub.columns and sub[error_col].notna().any():
+            idx = sub[error_col].idxmin()
+            error_best_round = int(sub.loc[idx, "round"]) if "round" in sub.columns else None
 
         row = {
             "iot": iot_id,
@@ -86,11 +94,13 @@ def _summarize_iot(df: pd.DataFrame, window: int) -> pd.DataFrame:
             "score_first": float(score.iloc[0]) if len(score) else None,
             "score_last": float(score.iloc[-1]) if len(score) else None,
             "score_best": float(score.max()) if len(score) else None,
+            "score_best_round": score_best_round,
             "score_delta_last_window": _window_delta(score, window),
             "score_std_last_window": _window_std(score, window),
             f"{error_label}_first": float(error.iloc[0]) if len(error) else None,
             f"{error_label}_last": float(error.iloc[-1]) if len(error) else None,
             f"{error_label}_best": float(error.min()) if len(error) else None,
+            f"{error_label}_best_round": error_best_round,
             f"{error_label}_delta_last_window": _window_delta(error, window),
             f"{error_label}_std_last_window": _window_std(error, window),
             "r2_last": float(r2.iloc[-1]) if len(r2) else None,
@@ -107,36 +117,51 @@ def _summarize_cloud(df: pd.DataFrame, window: int) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
 
-    cloud = df.sort_values("round") if "round" in df.columns else df.sort_values("_ts")
-    score_col = "global_score" if "global_score" in cloud.columns else None
-    rmse_col = "global_rmse" if "global_rmse" in cloud.columns else None
-    r2_col = "global_r2" if "global_r2" in cloud.columns else None
-    mape_col = "global_mape" if "global_mape" in cloud.columns else None
+    groups = df.groupby("target") if "target" in df.columns else [("global", df)]
+    rows = []
+    for target, sub in groups:
+        cloud = sub.sort_values("round") if "round" in sub.columns else sub.sort_values("_ts")
+        score_col = "global_score" if "global_score" in cloud.columns else None
+        rmse_col = "global_rmse" if "global_rmse" in cloud.columns else None
+        r2_col = "global_r2" if "global_r2" in cloud.columns else None
+        mape_col = "global_mape" if "global_mape" in cloud.columns else None
 
-    score = cloud[score_col].dropna() if score_col else pd.Series(dtype=float)
-    rmse = cloud[rmse_col].dropna() if rmse_col else pd.Series(dtype=float)
-    r2 = cloud[r2_col].dropna() if r2_col else pd.Series(dtype=float)
-    mape = cloud[mape_col].dropna() if mape_col else pd.Series(dtype=float)
+        score = cloud[score_col].dropna() if score_col else pd.Series(dtype=float)
+        rmse = cloud[rmse_col].dropna() if rmse_col else pd.Series(dtype=float)
+        r2 = cloud[r2_col].dropna() if r2_col else pd.Series(dtype=float)
+        mape = cloud[mape_col].dropna() if mape_col else pd.Series(dtype=float)
+        score_best_round = None
+        rmse_best_round = None
+        if score_col and cloud[score_col].notna().any() and "round" in cloud.columns:
+            idx = cloud[score_col].idxmax()
+            score_best_round = int(cloud.loc[idx, "round"])
+        if rmse_col and cloud[rmse_col].notna().any() and "round" in cloud.columns:
+            idx = cloud[rmse_col].idxmin()
+            rmse_best_round = int(cloud.loc[idx, "round"])
 
-    row = {
-        "rounds": int(cloud["round"].max()) if "round" in cloud.columns and cloud["round"].notna().any() else len(cloud),
-        "score_first": float(score.iloc[0]) if len(score) else None,
-        "score_last": float(score.iloc[-1]) if len(score) else None,
-        "score_best": float(score.max()) if len(score) else None,
-        "score_delta_last_window": _window_delta(score, window),
-        "score_std_last_window": _window_std(score, window),
-        "rmse_first": float(rmse.iloc[0]) if len(rmse) else None,
-        "rmse_last": float(rmse.iloc[-1]) if len(rmse) else None,
-        "rmse_best": float(rmse.min()) if len(rmse) else None,
-        "rmse_delta_last_window": _window_delta(rmse, window),
-        "rmse_std_last_window": _window_std(rmse, window),
-        "r2_last": float(r2.iloc[-1]) if len(r2) else None,
-        "r2_best": float(r2.max()) if len(r2) else None,
-        "mape_last": float(mape.iloc[-1]) if len(mape) else None,
-        "mape_best": float(mape.min()) if len(mape) else None,
-    }
+        row = {
+            "target": target,
+            "rounds": int(cloud["round"].max()) if "round" in cloud.columns and cloud["round"].notna().any() else len(cloud),
+            "score_first": float(score.iloc[0]) if len(score) else None,
+            "score_last": float(score.iloc[-1]) if len(score) else None,
+            "score_best": float(score.max()) if len(score) else None,
+            "score_best_round": score_best_round,
+            "score_delta_last_window": _window_delta(score, window),
+            "score_std_last_window": _window_std(score, window),
+            "rmse_first": float(rmse.iloc[0]) if len(rmse) else None,
+            "rmse_last": float(rmse.iloc[-1]) if len(rmse) else None,
+            "rmse_best": float(rmse.min()) if len(rmse) else None,
+            "rmse_best_round": rmse_best_round,
+            "rmse_delta_last_window": _window_delta(rmse, window),
+            "rmse_std_last_window": _window_std(rmse, window),
+            "r2_last": float(r2.iloc[-1]) if len(r2) else None,
+            "r2_best": float(r2.max()) if len(r2) else None,
+            "mape_last": float(mape.iloc[-1]) if len(mape) else None,
+            "mape_best": float(mape.min()) if len(mape) else None,
+        }
+        rows.append(row)
 
-    return pd.DataFrame([row])
+    return pd.DataFrame(rows).set_index("target").sort_index()
 
 
 def _write_md(path: Path, iot_df: pd.DataFrame, cloud_df: pd.DataFrame, window: int):
@@ -205,6 +230,33 @@ def main():
 
     out = metrics_dir / "convergence_report.md"
     _write_md(out, iot_summary, cloud_summary, args.window)
+
+    # Export best rounds (early-stopping hints)
+    best_rows = []
+    if not iot_summary.empty:
+        for iot_id, row in iot_summary.iterrows():
+            best_rows.append(
+                {
+                    "scope": "iot",
+                    "id": iot_id,
+                    "score_best_round": row.get("score_best_round"),
+                    "error_best_round": row.get("rmse_best_round") or row.get("mse_best_round") or row.get("error_best_round"),
+                }
+            )
+    if not cloud_summary.empty:
+        for target, row in cloud_summary.iterrows():
+            best_rows.append(
+                {
+                    "scope": "cloud",
+                    "id": target,
+                    "score_best_round": row.get("score_best_round"),
+                    "error_best_round": row.get("rmse_best_round"),
+                }
+            )
+    if best_rows:
+        best_df = pd.DataFrame(best_rows)
+        best_path = metrics_dir / "best_rounds.csv"
+        best_df.to_csv(best_path, index=False)
 
     print(f"[convergence] wrote {out}")
     if not iot_summary.empty:

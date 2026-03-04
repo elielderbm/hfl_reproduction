@@ -72,6 +72,12 @@ def plot():
                 plt.title(f"IoT {key} - MAPE")
                 _save_current_fig(OUT/f"iot_{key}_mape.png"); plt.close()
 
+            if "distill_rmse" in sub.columns:
+                plt.figure()
+                sub.plot(x="round", y="distill_rmse")
+                plt.title(f"IoT {key} - Distill RMSE")
+                _save_current_fig(OUT/f"iot_{key}_distill_rmse.png"); plt.close()
+
             # 🔹 Só plota round_time_ms se existir
             if "round_time_ms" in sub.columns:
                 plt.figure()
@@ -87,6 +93,16 @@ def plot():
             sub.plot(y=["window","pactual"])
             plt.title(f"Edge {key} - Window & Participation")
             _save_current_fig(OUT/f"edge_{key}_win_p.png"); plt.close()
+            if "edge_ft_rmse" in sub.columns:
+                plt.figure()
+                sub.plot(y="edge_ft_rmse")
+                plt.title(f"Edge {key} - FT RMSE")
+                _save_current_fig(OUT/f"edge_{key}_ft_rmse.png"); plt.close()
+            if "edge_ft_score" in sub.columns:
+                plt.figure()
+                sub.plot(y="edge_ft_score")
+                plt.title(f"Edge {key} - FT Score")
+                _save_current_fig(OUT/f"edge_{key}_ft_score.png"); plt.close()
 
     # Cloud: round vs edges and global error if available
     cloud = df[(df["type"]=="metric") & (df["file"].str.startswith("cloud"))].copy()
@@ -96,29 +112,62 @@ def plot():
         plt.title("Cloud - Edges contributing")
         _save_current_fig(OUT/f"cloud_edges.png"); plt.close()
 
-        if "global_rmse" in cloud.columns:
-            plt.figure()
-            cloud.plot(x="round", y="global_rmse")
-            plt.title("Cloud - Global RMSE")
-            _save_current_fig(OUT/f"cloud_global_rmse.png"); plt.close()
+        if "target" in cloud.columns:
+            for t, sub in cloud.groupby("target"):
+                if "global_rmse" in sub.columns:
+                    plt.figure()
+                    sub.plot(x="round", y="global_rmse")
+                    plt.title(f"Cloud - Global RMSE ({t})")
+                    _save_current_fig(OUT/f"cloud_global_rmse_{t}.png"); plt.close()
+                if "global_score" in sub.columns:
+                    plt.figure()
+                    sub.plot(x="round", y="global_score")
+                    plt.title(f"Cloud - Global Score ({t})")
+                    _save_current_fig(OUT/f"cloud_global_score_{t}.png"); plt.close()
+                if "global_r2" in sub.columns:
+                    plt.figure()
+                    sub.plot(x="round", y="global_r2")
+                    plt.title(f"Cloud - Global R2 ({t})")
+                    _save_current_fig(OUT/f"cloud_global_r2_{t}.png"); plt.close()
+                if "global_mape" in sub.columns:
+                    plt.figure()
+                    sub.plot(x="round", y="global_mape")
+                    plt.title(f"Cloud - Global MAPE ({t})")
+                    _save_current_fig(OUT/f"cloud_global_mape_{t}.png"); plt.close()
+        else:
+            if "global_rmse" in cloud.columns:
+                plt.figure()
+                cloud.plot(x="round", y="global_rmse")
+                plt.title("Cloud - Global RMSE")
+                _save_current_fig(OUT/f"cloud_global_rmse.png"); plt.close()
 
-        if "global_score" in cloud.columns:
-            plt.figure()
-            cloud.plot(x="round", y="global_score")
-            plt.title("Cloud - Global Score")
-            _save_current_fig(OUT/f"cloud_global_score.png"); plt.close()
+            if "global_score" in cloud.columns:
+                plt.figure()
+                cloud.plot(x="round", y="global_score")
+                plt.title("Cloud - Global Score")
+                _save_current_fig(OUT/f"cloud_global_score.png"); plt.close()
 
-        if "global_r2" in cloud.columns:
-            plt.figure()
-            cloud.plot(x="round", y="global_r2")
-            plt.title("Cloud - Global R2")
-            _save_current_fig(OUT/f"cloud_global_r2.png"); plt.close()
+            if "global_r2" in cloud.columns:
+                plt.figure()
+                cloud.plot(x="round", y="global_r2")
+                plt.title("Cloud - Global R2")
+                _save_current_fig(OUT/f"cloud_global_r2.png"); plt.close()
 
         if "global_mape" in cloud.columns:
             plt.figure()
             cloud.plot(x="round", y="global_mape")
             plt.title("Cloud - Global MAPE")
             _save_current_fig(OUT/f"cloud_global_mape.png"); plt.close()
+        if "server_ft_rmse" in cloud.columns:
+            plt.figure()
+            cloud.plot(x="round", y="server_ft_rmse")
+            plt.title("Cloud - Server FT RMSE")
+            _save_current_fig(OUT/f"cloud_server_ft_rmse.png"); plt.close()
+        if "server_ft_score" in cloud.columns:
+            plt.figure()
+            cloud.plot(x="round", y="server_ft_score")
+            plt.title("Cloud - Server FT Score")
+            _save_current_fig(OUT/f"cloud_server_ft_score.png"); plt.close()
 
         # Per-target curves (global_<target>_rmse/score)
         for col in cloud.columns:
@@ -143,6 +192,16 @@ def plot():
                 plt.figure()
                 cloud.plot(x="round", y=col)
                 plt.title(f"Cloud - {col.replace('global_', '').replace('_', ' ').upper()} MAPE")
+                _save_current_fig(OUT/f"cloud_{col}.png"); plt.close()
+            if col.endswith("_teacher_rmse"):
+                plt.figure()
+                cloud.plot(x="round", y=col)
+                plt.title(f"Cloud - {col.replace('_teacher_rmse','').upper()} Teacher RMSE")
+                _save_current_fig(OUT/f"cloud_{col}.png"); plt.close()
+            if col.endswith("_teacher_score"):
+                plt.figure()
+                cloud.plot(x="round", y=col)
+                plt.title(f"Cloud - {col.replace('_teacher_score','').upper()} Teacher Score")
                 _save_current_fig(OUT/f"cloud_{col}.png"); plt.close()
 
     print("[analysis] plots saved to outputs/*.png")

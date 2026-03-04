@@ -5,7 +5,7 @@ dataset: intel_lab
 # info_url: https://db.csail.mit.edu/labdata/labdata.html
 
 # Janela temporal e horizonte de previsão
-window_size: 24     # número de amostras passadas usadas como entrada
+window_size: 48     # número de amostras passadas usadas como entrada
 delta_steps: 1      # prever em t+Delta (em passos de amostra)
 
 # Variáveis usadas como entrada (todas disponíveis no Intel Lab)
@@ -15,12 +15,25 @@ features:
   - light
   - voltage
 
-# Variável-alvo por IoT (2 temp, 2 humidity)
+# Variável-alvo por IoT (2 temp, 2 humidity, 2 light)
 targets:
   iot1: temp
   iot2: temp
   iot3: humidity
   iot4: humidity
+  iot5: light
+  iot6: light
+
+# Tipo de tarefa por alvo
+tasks:
+  temp: regression
+  humidity: regression
+  light: classification
+
+# Configuração de classificação (binária)
+classification:
+  light:
+    threshold: median   # usa a mediana do treino como corte (0/1)
 
 # Splits temporais (ordem cronológica, sem shuffle)
 splits:
@@ -31,7 +44,7 @@ splits:
 # Escalonamento de features
 scaling:
   method: standard   # standard | none
-  with_target: false # não normaliza y por padrão
+  with_target: true  # normaliza y por target (temp/umidade)
 
 # Métricas de heterogeneidade (histogramas)
 heterogeneity_bins: 20

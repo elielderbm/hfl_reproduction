@@ -86,29 +86,41 @@ def main():
     # 2) Global RMSE (cloud)
     cloud_rmse = pd.DataFrame()
     if not cloud.empty and "global_rmse" in cloud.columns:
-        cloud_rmse = cloud[["round", "global_rmse"]].dropna().sort_values("round")
+        cols = ["round", "global_rmse"]
+        if "target" in cloud.columns:
+            cols.append("target")
+        cloud_rmse = cloud[cols].dropna().sort_values("round")
         _write_csv(cloud_rmse, "paper_global_rmse.csv")
-        _plot_line(cloud_rmse, "round", "global_rmse", "Global RMSE", "paper_global_rmse.png")
+        _plot_line(cloud_rmse, "round", "global_rmse", "Global RMSE", "paper_global_rmse.png", hue="target" if "target" in cloud.columns else None)
 
     # 2b) Global Score (cloud)
     cloud_score = pd.DataFrame()
     if not cloud.empty and "global_score" in cloud.columns:
-        cloud_score = cloud[["round", "global_score"]].dropna().sort_values("round")
+        cols = ["round", "global_score"]
+        if "target" in cloud.columns:
+            cols.append("target")
+        cloud_score = cloud[cols].dropna().sort_values("round")
         _write_csv(cloud_score, "paper_global_score.csv")
-        _plot_line(cloud_score, "round", "global_score", "Global Score", "paper_global_score.png")
+        _plot_line(cloud_score, "round", "global_score", "Global Score", "paper_global_score.png", hue="target" if "target" in cloud.columns else None)
 
     # 2c) Global R2 / MAPE (cloud)
     cloud_r2 = pd.DataFrame()
     if not cloud.empty and "global_r2" in cloud.columns:
-        cloud_r2 = cloud[["round", "global_r2"]].dropna().sort_values("round")
+        cols = ["round", "global_r2"]
+        if "target" in cloud.columns:
+            cols.append("target")
+        cloud_r2 = cloud[cols].dropna().sort_values("round")
         _write_csv(cloud_r2, "paper_global_r2.csv")
-        _plot_line(cloud_r2, "round", "global_r2", "Global R2", "paper_global_r2.png")
+        _plot_line(cloud_r2, "round", "global_r2", "Global R2", "paper_global_r2.png", hue="target" if "target" in cloud.columns else None)
 
     cloud_mape = pd.DataFrame()
     if not cloud.empty and "global_mape" in cloud.columns:
-        cloud_mape = cloud[["round", "global_mape"]].dropna().sort_values("round")
+        cols = ["round", "global_mape"]
+        if "target" in cloud.columns:
+            cols.append("target")
+        cloud_mape = cloud[cols].dropna().sort_values("round")
         _write_csv(cloud_mape, "paper_global_mape.csv")
-        _plot_line(cloud_mape, "round", "global_mape", "Global MAPE", "paper_global_mape.png")
+        _plot_line(cloud_mape, "round", "global_mape", "Global MAPE", "paper_global_mape.png", hue="target" if "target" in cloud.columns else None)
 
     # 3) Round time (cloud _ts delta)
     round_time = pd.DataFrame()

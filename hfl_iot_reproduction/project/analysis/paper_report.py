@@ -178,10 +178,23 @@ def compute_summary(df: pd.DataFrame, pdesired: float | None = None) -> Summary:
         if mape_col:
             local_mape_last = _mean(g[mape_col].last())
 
-    global_score = cloud["global_score"] if "global_score" in cloud.columns else pd.Series(dtype=float)
-    global_rmse = cloud["global_rmse"] if "global_rmse" in cloud.columns else pd.Series(dtype=float)
-    global_r2 = cloud["global_r2"] if "global_r2" in cloud.columns else pd.Series(dtype=float)
-    global_mape = cloud["global_mape"] if "global_mape" in cloud.columns else pd.Series(dtype=float)
+    if not cloud.empty and "target" in cloud.columns:
+        g_target = cloud.sort_values("round").groupby("target")
+        global_score_last = _mean(g_target["global_score"].last()) if "global_score" in cloud.columns else None
+        global_score_best = _mean(g_target["global_score"].max()) if "global_score" in cloud.columns else None
+        global_rmse_last = _mean(g_target["global_rmse"].last()) if "global_rmse" in cloud.columns else None
+        global_r2_last = _mean(g_target["global_r2"].last()) if "global_r2" in cloud.columns else None
+        global_mape_last = _mean(g_target["global_mape"].last()) if "global_mape" in cloud.columns else None
+    else:
+        global_score = cloud["global_score"] if "global_score" in cloud.columns else pd.Series(dtype=float)
+        global_rmse = cloud["global_rmse"] if "global_rmse" in cloud.columns else pd.Series(dtype=float)
+        global_r2 = cloud["global_r2"] if "global_r2" in cloud.columns else pd.Series(dtype=float)
+        global_mape = cloud["global_mape"] if "global_mape" in cloud.columns else pd.Series(dtype=float)
+        global_score_last = _last(global_score)
+        global_score_best = _best_high(global_score)
+        global_rmse_last = _last(global_rmse)
+        global_r2_last = _last(global_r2)
+        global_mape_last = _last(global_mape)
 
     round_time_s = pd.Series(dtype=float)
     if not cloud.empty and "_ts" in cloud.columns:
@@ -222,11 +235,11 @@ def compute_summary(df: pd.DataFrame, pdesired: float | None = None) -> Summary:
         local_error_last_mean=local_error_last,
         local_r2_last_mean=local_r2_last,
         local_mape_last_mean=local_mape_last,
-        global_score_last=_last(global_score),
-        global_score_best=_best_high(global_score),
-        global_rmse_last=_last(global_rmse),
-        global_r2_last=_last(global_r2),
-        global_mape_last=_last(global_mape),
+        global_score_last=global_score_last,
+        global_score_best=global_score_best,
+        global_rmse_last=global_rmse_last,
+        global_r2_last=global_r2_last,
+        global_mape_last=global_mape_last,
         round_time_s_mean=_mean(round_time_s),
         round_time_s_p90=_p90(round_time_s),
         throughput_kbps_mean=_mean(throughput),
@@ -258,8 +271,12 @@ def main():
     edge = metrics[metrics["file"].str.startswith("edge")].copy()
     cloud = metrics[metrics["file"].str.startswith("cloud")].copy()
 
-    global_score = cloud["global_score"] if "global_score" in cloud.columns else pd.Series(dtype=float)
-    rounds = cloud["round"] if "round" in cloud.columns else pd.Series(dtype=float)
+    if not cloud.empty and "target" in cloud.columns and "global_score" in cloud.columns and "round" in cloud.columns:
+        global_score = cloud.groupby("round")["global_score"].mean()
+        rounds = global_score.index.to_series()
+    else:
+        global_score = cloud["global_score"] if "global_score" in cloud.columns else pd.Series(dtype=float)
+        rounds = cloud["round"] if "round" in cloud.columns else pd.Series(dtype=float)
 
     best_global = _best_high(global_score)
     t90 = _time_to_threshold(rounds, global_score, 0.9 * best_global) if best_global else None
@@ -318,6 +335,25 @@ def main():
         report.append(f"| Encrypt Overhead / Round Time | {overhead_ratio:.2f}% |")
     report.append("")
 
+    if not cloud.empty and "target" in cloud.columns:
+        rows = []
+        for target, sub in cloud.sort_values("round").groupby("target"):
+            score = sub["global_score"].dropna() if "global_score" in sub.columns else pd.Series(dtype=float)
+            rmse = sub["global_rmse"].dropna() if "global_rmse" in sub.columns else pd.Series(dtype=float)
+            r2 = sub["global_r2"].dropna() if "global_r2" in sub.columns else pd.Series(dtype=float)
+            mape = sub["global_mape"].dropna() if "global_mape" in sub.columns else pd.Series(dtype=float)
+            rows.append({
+                "target": target,
+                "score_last": float(score.iloc[-1]) if len(score) else None,
+                "rmse_last": float(rmse.iloc[-1]) if len(rmse) else None,
+                "r2_last": float(r2.iloc[-1]) if len(r2) else None,
+                "mape_last": float(mape.iloc[-1]) if len(mape) else None,
+            })
+        if rows:
+            report.append("## Global Metrics by Target")
+            report.append(pd.DataFrame(rows).to_markdown(index=False))
+            report.append("")
+
     report.append("## Dynamic Analysis")
     if best_global is not None:
         report.append(f"- Time-to-90% of best global score: round {t90}" if t90 is not None else "- Time-to-90% of best global score: n/a")
@@ -336,6 +372,8 @@ def main():
     report.append("- The async edge aggregation reduces round time while keeping global score aligned with local convergence, matching the paper’s efficiency-first claim.")
     report.append("- Sliding window adaptation reflects participation dynamics; drift toward smaller windows suggests frequent arrivals (pactual near 1.0).")
     report.append("- Salsa20 overhead remains small relative to round time, consistent with the paper’s overhead analysis.")
+    if not cloud.empty and "target" in cloud.columns:
+        report.append("- Global metrics are reported per target (temperature vs humidity vs light) to avoid mixing tasks.")
 
     if hetero:
         report.append("")
