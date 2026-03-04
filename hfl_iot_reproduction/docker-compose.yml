@@ -19,6 +19,13 @@ services:
     command: ["python", "data/prepare_intel_lab.py"]
     networks: [hflnet]
 
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    volumes:
+      - ./docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    networks: [hflnet]
+
   cloud:
     build:
       context: .
@@ -27,6 +34,11 @@ services:
     container_name: cloud
     environment:
       - ROLE=cloud
+      - MQTT_HOST=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_BASE_TOPIC=${MQTT_BASE_TOPIC:-hfl}
+      - MQTT_QOS=${MQTT_QOS:-1}
+      - MQTT_KEEPALIVE=${MQTT_KEEPALIVE:-60}
       - SIM_ROUNDS=${SIM_ROUNDS}
       - BETA_CLOUD=${BETA_CLOUD}
       - OPTIMIZER=${OPTIMIZER:-sgd}
@@ -66,7 +78,6 @@ services:
       - SAVE_GLOBAL_WEIGHTS=${SAVE_GLOBAL_WEIGHTS:-0}
       - SAVE_GLOBAL_WEIGHTS_EVERY=${SAVE_GLOBAL_WEIGHTS_EVERY:-1}
       - WEIGHTS_DIR=${WEIGHTS_DIR:-/workspace/outputs/weights}
-      - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
       - PYTHONUNBUFFERED=1
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
@@ -84,6 +95,7 @@ services:
     networks: [hflnet]
     depends_on:
       - data_prep
+      - mosquitto
 
   edge1:
     build:
@@ -93,6 +105,11 @@ services:
     container_name: edge1
     environment:
       - ROLE=edge
+      - MQTT_HOST=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_BASE_TOPIC=${MQTT_BASE_TOPIC:-hfl}
+      - MQTT_QOS=${MQTT_QOS:-1}
+      - MQTT_KEEPALIVE=${MQTT_KEEPALIVE:-60}
       - EDGE_ID=edge1
       - EDGE_TARGET=${EDGE1_TARGET:-temp}
       - PYTHONUNBUFFERED=1
@@ -110,7 +127,6 @@ services:
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
       - EDGE_WEIGHT_BY_SAMPLES=${EDGE_WEIGHT_BY_SAMPLES:-1}
-      - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
       - EDGE_FT_EPOCHS=${EDGE_FT_EPOCHS:-2}
       - EDGE_FT_BATCH=${EDGE_FT_BATCH:-128}
       - EDGE_FT_EVERY=${EDGE_FT_EVERY:-1}
@@ -152,12 +168,18 @@ services:
     depends_on:
       - data_prep
       - cloud
+      - mosquitto
 
   edge2:
     image: hfl_edge:latest
     container_name: edge2
     environment:
       - ROLE=edge
+      - MQTT_HOST=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_BASE_TOPIC=${MQTT_BASE_TOPIC:-hfl}
+      - MQTT_QOS=${MQTT_QOS:-1}
+      - MQTT_KEEPALIVE=${MQTT_KEEPALIVE:-60}
       - EDGE_ID=edge2
       - EDGE_TARGET=${EDGE2_TARGET:-humidity}
       - PYTHONUNBUFFERED=1
@@ -175,7 +197,6 @@ services:
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
       - EDGE_WEIGHT_BY_SAMPLES=${EDGE_WEIGHT_BY_SAMPLES:-1}
-      - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
       - EDGE_FT_EPOCHS=${EDGE_FT_EPOCHS:-2}
       - EDGE_FT_BATCH=${EDGE_FT_BATCH:-128}
       - EDGE_FT_EVERY=${EDGE_FT_EVERY:-1}
@@ -217,12 +238,18 @@ services:
     depends_on:
       - data_prep
       - cloud
+      - mosquitto
 
   edge3:
     image: hfl_edge:latest
     container_name: edge3
     environment:
       - ROLE=edge
+      - MQTT_HOST=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_BASE_TOPIC=${MQTT_BASE_TOPIC:-hfl}
+      - MQTT_QOS=${MQTT_QOS:-1}
+      - MQTT_KEEPALIVE=${MQTT_KEEPALIVE:-60}
       - EDGE_ID=edge3
       - EDGE_TARGET=${EDGE3_TARGET:-light}
       - PYTHONUNBUFFERED=1
@@ -240,7 +267,6 @@ services:
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
       - EDGE_WEIGHT_BY_SAMPLES=${EDGE_WEIGHT_BY_SAMPLES:-1}
-      - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
       - EDGE_FT_EPOCHS=${EDGE_FT_EPOCHS:-2}
       - EDGE_FT_BATCH=${EDGE_FT_BATCH:-128}
       - EDGE_FT_EVERY=${EDGE_FT_EVERY:-1}
@@ -282,6 +308,7 @@ services:
     depends_on:
       - data_prep
       - cloud
+      - mosquitto
 
   iot1:
     build:
@@ -291,8 +318,13 @@ services:
     container_name: iot1
     environment:
       - ROLE=iot
+      - MQTT_HOST=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_BASE_TOPIC=${MQTT_BASE_TOPIC:-hfl}
+      - MQTT_QOS=${MQTT_QOS:-1}
+      - MQTT_KEEPALIVE=${MQTT_KEEPALIVE:-60}
       - IOT_ID=iot1
-      - EDGE_URI=ws://edge1:8765   # 🔗 conecta no edge1
+      - EDGE_ID=edge1
       - OPTIMIZER=${OPTIMIZER:-sgd}
       - CLIP_NORM=${CLIP_NORM:-1.0}
       - LOSS_FN=${LOSS_FN:-huber}
@@ -304,7 +336,6 @@ services:
       - PYTHONUNBUFFERED=1
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
-      - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
       - STUDENT_MODEL_TYPE=${STUDENT_MODEL_TYPE:-tcn}
       - STUDENT_MLP_UNITS=${STUDENT_MLP_UNITS:-64,32}
       - STUDENT_MLP_DROPOUT=${STUDENT_MLP_DROPOUT:-0.0}
@@ -330,14 +361,20 @@ services:
     depends_on:
       - data_prep
       - edge1
+      - mosquitto
 
   iot2:
     image: hfl_iot:latest
     container_name: iot2
     environment:
       - ROLE=iot
+      - MQTT_HOST=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_BASE_TOPIC=${MQTT_BASE_TOPIC:-hfl}
+      - MQTT_QOS=${MQTT_QOS:-1}
+      - MQTT_KEEPALIVE=${MQTT_KEEPALIVE:-60}
       - IOT_ID=iot2
-      - EDGE_URI=ws://edge1:8765   # 🔗 conecta no edge1
+      - EDGE_ID=edge1
       - OPTIMIZER=${OPTIMIZER:-sgd}
       - CLIP_NORM=${CLIP_NORM:-1.0}
       - LOSS_FN=${LOSS_FN:-huber}
@@ -349,7 +386,6 @@ services:
       - PYTHONUNBUFFERED=1
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
-      - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
       - STUDENT_MODEL_TYPE=${STUDENT_MODEL_TYPE:-tcn}
       - STUDENT_MLP_UNITS=${STUDENT_MLP_UNITS:-64,32}
       - STUDENT_MLP_DROPOUT=${STUDENT_MLP_DROPOUT:-0.0}
@@ -375,14 +411,20 @@ services:
     depends_on:
       - data_prep
       - edge1
+      - mosquitto
 
   iot3:
     image: hfl_iot:latest
     container_name: iot3
     environment:
       - ROLE=iot
+      - MQTT_HOST=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_BASE_TOPIC=${MQTT_BASE_TOPIC:-hfl}
+      - MQTT_QOS=${MQTT_QOS:-1}
+      - MQTT_KEEPALIVE=${MQTT_KEEPALIVE:-60}
       - IOT_ID=iot3
-      - EDGE_URI=ws://edge2:8765   # 🔗 conecta no edge2
+      - EDGE_ID=edge2
       - OPTIMIZER=${OPTIMIZER:-sgd}
       - CLIP_NORM=${CLIP_NORM:-1.0}
       - LOSS_FN=${LOSS_FN:-huber}
@@ -394,7 +436,6 @@ services:
       - PYTHONUNBUFFERED=1
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
-      - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
       - STUDENT_MODEL_TYPE=${STUDENT_MODEL_TYPE:-tcn}
       - STUDENT_MLP_UNITS=${STUDENT_MLP_UNITS:-64,32}
       - STUDENT_MLP_DROPOUT=${STUDENT_MLP_DROPOUT:-0.0}
@@ -420,14 +461,20 @@ services:
     depends_on:
       - data_prep
       - edge2
+      - mosquitto
 
   iot4:
     image: hfl_iot:latest
     container_name: iot4
     environment:
       - ROLE=iot
+      - MQTT_HOST=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_BASE_TOPIC=${MQTT_BASE_TOPIC:-hfl}
+      - MQTT_QOS=${MQTT_QOS:-1}
+      - MQTT_KEEPALIVE=${MQTT_KEEPALIVE:-60}
       - IOT_ID=iot4
-      - EDGE_URI=ws://edge2:8765   # 🔗 conecta no edge2
+      - EDGE_ID=edge2
       - OPTIMIZER=${OPTIMIZER:-sgd}
       - CLIP_NORM=${CLIP_NORM:-1.0}
       - LOSS_FN=${LOSS_FN:-huber}
@@ -439,7 +486,6 @@ services:
       - PYTHONUNBUFFERED=1
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
-      - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
       - STUDENT_MODEL_TYPE=${STUDENT_MODEL_TYPE:-tcn}
       - STUDENT_MLP_UNITS=${STUDENT_MLP_UNITS:-64,32}
       - STUDENT_MLP_DROPOUT=${STUDENT_MLP_DROPOUT:-0.0}
@@ -465,14 +511,20 @@ services:
     depends_on:
       - data_prep
       - edge2
+      - mosquitto
 
   iot5:
     image: hfl_iot:latest
     container_name: iot5
     environment:
       - ROLE=iot
+      - MQTT_HOST=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_BASE_TOPIC=${MQTT_BASE_TOPIC:-hfl}
+      - MQTT_QOS=${MQTT_QOS:-1}
+      - MQTT_KEEPALIVE=${MQTT_KEEPALIVE:-60}
       - IOT_ID=iot5
-      - EDGE_URI=ws://edge3:8765   # 🔗 conecta no edge3
+      - EDGE_ID=edge3
       - OPTIMIZER=${OPTIMIZER:-sgd}
       - CLIP_NORM=${CLIP_NORM:-1.0}
       - LOSS_FN=${LOSS_FN:-huber}
@@ -484,7 +536,6 @@ services:
       - PYTHONUNBUFFERED=1
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
-      - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
       - STUDENT_MODEL_TYPE=${STUDENT_MODEL_TYPE:-tcn}
       - STUDENT_MLP_UNITS=${STUDENT_MLP_UNITS:-64,32}
       - STUDENT_MLP_DROPOUT=${STUDENT_MLP_DROPOUT:-0.0}
@@ -510,14 +561,20 @@ services:
     depends_on:
       - data_prep
       - edge3
+      - mosquitto
 
   iot6:
     image: hfl_iot:latest
     container_name: iot6
     environment:
       - ROLE=iot
+      - MQTT_HOST=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_BASE_TOPIC=${MQTT_BASE_TOPIC:-hfl}
+      - MQTT_QOS=${MQTT_QOS:-1}
+      - MQTT_KEEPALIVE=${MQTT_KEEPALIVE:-60}
       - IOT_ID=iot6
-      - EDGE_URI=ws://edge3:8765   # 🔗 conecta no edge3
+      - EDGE_ID=edge3
       - OPTIMIZER=${OPTIMIZER:-sgd}
       - CLIP_NORM=${CLIP_NORM:-1.0}
       - LOSS_FN=${LOSS_FN:-huber}
@@ -529,7 +586,6 @@ services:
       - PYTHONUNBUFFERED=1
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
-      - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
       - STUDENT_MODEL_TYPE=${STUDENT_MODEL_TYPE:-tcn}
       - STUDENT_MLP_UNITS=${STUDENT_MLP_UNITS:-64,32}
       - STUDENT_MLP_DROPOUT=${STUDENT_MLP_DROPOUT:-0.0}
@@ -555,6 +611,7 @@ services:
     depends_on:
       - data_prep
       - edge3
+      - mosquitto
 
   analyzer:
     image: hfl_analyzer:latest

@@ -9,7 +9,7 @@ Reprodução **fiel** da metodologia do artigo *“Hierarchical Aggregation for 
 - **Modelos por camada**: *student* leve no IoT/Edge (MLP pequena) e *teacher* robusto no Cloud; Edge pode treinar um *teacher* moderado local para melhorar a inferência sem quebrar a agregação.
 - **Distilação teacher → student** (opcional) para melhorar inferência sem expor dados.
 - **Modelos globais por target** (temperatura, umidade e luminosidade separados).
-- **WebSocket** full-duplex entre camadas.
+- **MQTT (pub/sub)** entre camadas, com broker local (Mosquitto).
 - Métricas e análises: *score* de qualidade, **RMSE/MAE/R2/MAPE** (regressão), **Acurácia/Precisão/Recall/F1/BCE** (classificação), distillation error, round time, throughput, participação e qualidade.
 - **Barreira de prontidão** (opcional) para iniciar somente quando Edge/IoT estiverem conectados.
 
@@ -31,7 +31,7 @@ sudo docker compose run --rm analyzer python -m project.analysis.target_report -
 .
 ├── docker-compose.yml
 ├── .env                  # Ajuste se necessário
-├── docker/               # Dockerfiles por serviço
+├── docker/               # Dockerfiles por serviço + mosquitto.conf
 ├── data/                 # Scripts para obter e particionar Intel Lab
 ├── project/              # Código (IoT/Edge/Cloud) + análises
 ├── config/               # Mapas de clientes, dataset e hiperparâmetros
@@ -74,11 +74,25 @@ Para cada IoT:
 ```
 sudo docker compose up data_prep
 ```
+- **mosquitto**: broker **MQTT** para o barramento de mensagens entre IoT ↔ Edge ↔ Cloud.
 - **cloud**: agrega modelos dos edges com pesos `v_e = β·p_e + (1-β)·q_e`, mantém **modelo global por target**, treina *teacher* (opcional) com proxy público e envia *feedback*.
 - **edge1/edge2/edge3**: recebem atualizações de IoTs, agregam de forma **assíncrona** usando **janela deslizante** e suavização histórica, **replicando pesos por target**.
 - **iot1..iot6**: treinam localmente (TensorFlow), enviam atualização criptografada (Salsa20) + métricas locais, e podem usar **distilação** com *teacher*.
 - **analyzer**: consolida logs em CSV e gera gráficos.
 - **baseline (opcional)**: `SYNC_MODE=1` nos edges habilita agregação síncrona (HierFAVG) para comparação.
+
+## Comunicação MQTT
+Broker local: **Mosquitto** (container `mosquitto`). Mensagens são JSON e os pesos seguem a política de **mínimo tráfego** (apenas *student*, exceto quando `TEACHER_PUSH_*` estiver ativo).
+Cada IoT publica no tópico do seu **edge** configurado via `EDGE_ID` (ver `docker-compose.yml`).
+O broker está configurado em `docker/mosquitto.conf` com `max_packet_size 10485760` para suportar pesos grandes (~10 MB).
+Diagrama de sequência (MQTT): `docs/mqtt_sequence.md`.
+Cada envio registra em log o tamanho **exato** do pacote MQTT (`mqtt_packet_bytes`) e o payload JSON (`mqtt_payload_bytes`).
+
+Tópicos:
+- `hfl/edge/<edge_id>/iot/up` → IoT → Edge (`hello`, `update`)
+- `hfl/edge/<edge_id>/iot/down/<iot_id>` → Edge → IoT (`init`, `model`, `start`)
+- `hfl/cloud/up/<edge_id>` → Edge → Cloud (`hello`, `edge_model`)
+- `hfl/cloud/down/<edge_id>` → Cloud → Edge (`init`, `model`)
 
 ## Como usar
 1. **Dependências**: Docker + Docker Compose.
@@ -125,7 +139,7 @@ sudo docker compose up data_prep
 - TCN por camada: `STUDENT_TCN_*`, `CLOUD_TCN_*` (tamanho do modelo)
 - Agregação por amostras no Edge: `EDGE_WEIGHT_BY_SAMPLES`
 - Barreira de prontidão: `CLOUD_WAIT_FOR_EDGES`, `CLOUD_EXPECTED_EDGES`, `EDGE_WAIT_FOR_IOTS`, `EDGE_EXPECTED_IOTS`, `EDGE_WAIT_FOR_CLOUD`, `IOT_WAIT_FOR_READY`
-- WebSocket tamanho máximo de mensagem: `WS_MAX_SIZE` (ex.: `16mb`); aumente se usar teacher muito grande
+- MQTT: `MQTT_HOST`, `MQTT_PORT`, `MQTT_BASE_TOPIC`, `MQTT_QOS`, `MQTT_KEEPALIVE` (broker/config em `docker/mosquitto.conf`)
 - Dataset (regressão temporal): `config/dataset.yml`
   - `window_size`, `delta_steps`, `features`, `targets`
   - `scaling.with_target` habilita normalização do alvo por target

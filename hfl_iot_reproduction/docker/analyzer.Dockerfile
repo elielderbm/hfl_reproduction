@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends     build-essen
 
 # TensorFlow CPU + libs (on IoT; edges/cloud analyze don't need TF but it's fine)
 # Keep versions moderate for compatibility
-RUN pip install --no-cache-dir numpy==1.26.4 pandas==2.2.2 websockets==12.0     pyyaml==6.0.2 matplotlib==3.9.0 scikit-learn==1.5.1 requests==2.32.3     tabulate==0.9.0 tensorflow-cpu==2.15.0.post1
+RUN pip install --no-cache-dir numpy==1.26.4 pandas==2.2.2 paho-mqtt==1.6.1     pyyaml==6.0.2 matplotlib==3.9.0 scikit-learn==1.5.1 requests==2.32.3     tabulate==0.9.0 tensorflow-cpu==2.15.0.post1
 
 WORKDIR /workspace
 

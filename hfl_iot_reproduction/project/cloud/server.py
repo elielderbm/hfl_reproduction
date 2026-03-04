@@ -1,11 +1,10 @@
-import os, asyncio, json, time, numpy as np, random, re
+import os, asyncio, time, numpy as np, random, re
 from collections import defaultdict
 from pathlib import Path
 
-from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
 import tensorflow as tf
 
-from project.common.messaging import ws_server
+from project.common.messaging import MQTTBus
 from project.common.crypto import decrypt
 from project.common.model import build_model, compile_model, get_weights_vector, set_weights_vector
 from project.common.logging_utils import log_event, log_metric
@@ -14,7 +13,11 @@ from project.common.config import load_hparams
 from project.common.data_utils import load_global_test_by_target, load_split_by_target, unscale_target
 from project.common.dataset_config import load_dataset_config, task_for_target
 
-PORT = 9000
+MQTT_BASE = os.getenv("MQTT_BASE_TOPIC", "hfl")
+MQTT_HOST = os.getenv("MQTT_HOST", "mosquitto")
+MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
+MQTT_QOS = int(os.getenv("MQTT_QOS", "1"))
+MQTT_KEEPALIVE = int(os.getenv("MQTT_KEEPALIVE", "60"))
 GLOBAL_SEED = int(os.getenv("GLOBAL_SEED", "42"))
 random.seed(GLOBAL_SEED); np.random.seed(GLOBAL_SEED)
 
@@ -68,8 +71,9 @@ teacher_models = {}
 proxy_train_by_target = {}
 ft_models = {}
 
-# Conexões ativas
-peers = {}  # edge_id -> websocket
+# Edges ativos (via MQTT)
+peers = set()  # edge_id -> conectado (hello recebido)
+edge_last = defaultdict(dict)  # target -> {edge_id: weights}
 
 SAVE_WEIGHTS = os.getenv("SAVE_GLOBAL_WEIGHTS", "0") == "1"
 SAVE_EVERY = int(os.getenv("SAVE_GLOBAL_WEIGHTS_EVERY", "1"))
@@ -79,11 +83,23 @@ WEIGHTS_DIR = Path(os.getenv("WEIGHTS_DIR", "/workspace/outputs/weights"))
 def _cloud_ready() -> bool:
     if not CLOUD_WAIT_FOR_EDGES or not CLOUD_EXPECTED_EDGES:
         return True
-    return CLOUD_EXPECTED_EDGES.issubset(peers.keys())
+    return CLOUD_EXPECTED_EDGES.issubset(peers)
 
 
 def _slug(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]+", "_", str(name).strip().lower()).strip("_")
+
+
+def _cloud_down_topic(edge_id: str) -> str:
+    return f"{MQTT_BASE}/cloud/down/{edge_id}"
+
+
+def _edge_from_topic(topic: str) -> str | None:
+    parts = topic.strip("/").split("/")
+    for i in range(len(parts) - 2):
+        if parts[i] == "cloud" and parts[i + 1] == "up":
+            return parts[i + 2]
+    return None
 
 
 def edge_key_for(edge_id):
@@ -292,271 +308,284 @@ def _evaluate_target(target: str, weights: np.ndarray):
     }
 
 
-async def handler(ws, path):
+async def mqtt_loop():
+    """
+    Loop principal do Cloud via MQTT. Processa hello/edge_model e publica init/model.
+    """
     global round_ctr
 
-    try:
-        hello_raw = await ws.recv()
-        hello = json.loads(hello_raw)
-    except (ConnectionClosedOK, ConnectionClosedError):
-        print("[cloud] conexão encerrada antes do hello")
-        return
-    except Exception as e:
-        print(f"[cloud] erro recebendo hello: {e}")
-        return
+    mqtt_bus = MQTTBus(client_id="cloud-mqtt", host=MQTT_HOST, port=MQTT_PORT)
+    backoff = 1.0
+    while True:
+        try:
+            await mqtt_bus.connect()
+            break
+        except Exception as e:
+            print(f"[cloud] erro conectando MQTT ({MQTT_HOST}:{MQTT_PORT}): {e}")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2.0, 30.0)
 
-    if hello.get("type") != "hello":
-        print("[cloud] mensagem inicial inválida")
-        return
+    mqtt_bus.subscribe(f"{MQTT_BASE}/cloud/up/#")
+    print(f"[cloud] MQTT conectado em {MQTT_HOST}:{MQTT_PORT}, tópico={MQTT_BASE}/cloud/up/#")
 
-    edge = hello.get("edge")
-    target = hello.get("target") or TARGETS[0]
-    if target not in TARGETS:
-        print(f"[cloud] target desconhecido '{target}' de {edge}; usando {TARGETS[0]}")
-        target = TARGETS[0]
-    edge_target[edge] = target
+    while True:
+        topic, msg, meta = await mqtt_bus.recv_json()
+        if not isinstance(msg, dict):
+            continue
+        edge = msg.get("edge") or _edge_from_topic(topic)
+        if not edge:
+            continue
+        log_event(
+            "cloud",
+            event="mqtt_rx",
+            edge=edge,
+            topic=topic,
+            msg_type=msg.get("type"),
+            target=msg.get("target"),
+            **(meta or {}),
+        )
 
-    print(f"[cloud] novo edge conectado: {edge} (target={target})")
-    peers[edge] = ws
+        mtype = msg.get("type")
+        if mtype == "hello":
+            target = msg.get("target") or TARGETS[0]
+            if target not in TARGETS:
+                print(f"[cloud] target desconhecido '{target}' de {edge}; usando {TARGETS[0]}")
+                target = TARGETS[0]
+            edge_target[edge] = target
+            peers.add(edge)
+            print(f"[cloud] novo edge conectado: {edge} (target={target})")
 
-    # Envia init
-    try:
-        teacher_payload = teacher_weights.get(target) if (TEACHER_ENABLE and TEACHER_PUSH_INIT) else None
-        await ws.send(json.dumps({
-            "type": "init",
-            "whex": w_global[target].tobytes().hex(),
-            "target": target,
-            "teacher_whex": teacher_payload.tobytes().hex() if teacher_payload is not None else None,
-            "teacher_version": teacher_version.get(target),
-            "teacher_score": (teacher_metrics_by_target.get(target, {}) or {}).get("teacher_score"),
-        }))
-        print(f"[cloud] init enviado para {edge} (n={w_global[target].size})")
-    except Exception as e:
-        print(f"[cloud] erro enviando init para {edge}: {e}")
-        peers.pop(edge, None)
-        return
-
-    if not hasattr(handler, "edge_last"):
-        handler.edge_last = {t: {} for t in TARGETS}
-
-    try:
-        while True:
+            # Envia init
             try:
-                raw = await ws.recv()
-                if raw is None:
-                    print(f"[cloud] conexão fechada (sem msg) por {edge}")
-                    break
-                msg = json.loads(raw)
-            except ConnectionClosedOK:
-                print(f"[cloud] conexão encerrada OK ({edge})")
-                break
-            except ConnectionClosedError as e:
-                print(f"[cloud] conexão encerrada erro ({edge}): {e}")
-                break
-            except Exception as e:
-                print(f"[cloud] erro ao receber de {edge}: {e}")
-                continue
-
-            if msg.get("type") != "edge_model":
-                print(f"[cloud] ignorando msg de {edge} tipo={msg.get('type')}")
-                continue
-
-            msg_target = msg.get("target") or edge_target.get(edge) or TARGETS[0]
-            if msg_target not in TARGETS:
-                print(f"[cloud] target inválido '{msg_target}' de {edge}. Ignorado.")
-                continue
-
-            ek = edge_key_for(edge)
-            try:
-                dec_start = time.time()
-                dec = decrypt(ek, bytes.fromhex(msg["bytes"]))
-                dec_ms = (time.time() - dec_start) * 1000.0
-                we = np.frombuffer(dec, dtype=np.float32)
-            except Exception as e:
-                print(f"[cloud] erro decriptando modelo de {edge}: {e}")
-                continue
-
-            if we.shape != w_global[msg_target].shape:
-                print(
-                    f"[cloud] SHAPE MISMATCH de {edge}: recebido={we.shape}, esperado={w_global[msg_target].shape}. Ignorado."
+                teacher_payload = teacher_weights.get(target) if (TEACHER_ENABLE and TEACHER_PUSH_INIT) else None
+                tx_init = mqtt_bus.publish_json(_cloud_down_topic(edge), {
+                    "type": "init",
+                    "whex": w_global[target].tobytes().hex(),
+                    "target": target,
+                    "teacher_whex": teacher_payload.tobytes().hex() if teacher_payload is not None else None,
+                    "teacher_version": teacher_version.get(target),
+                    "teacher_score": (teacher_metrics_by_target.get(target, {}) or {}).get("teacher_score"),
+                })
+                log_event(
+                    "cloud",
+                    event="mqtt_tx",
+                    edge=edge,
+                    topic=_cloud_down_topic(edge),
+                    msg_type="init",
+                    target=target,
+                    **(tx_init or {}),
                 )
+                print(f"[cloud] init enviado para {edge} (n={w_global[target].size})")
+            except Exception as e:
+                print(f"[cloud] erro enviando init para {edge}: {e}")
+            continue
+
+        if mtype != "edge_model":
+            continue
+
+        msg_target = msg.get("target") or edge_target.get(edge) or TARGETS[0]
+        if msg_target not in TARGETS:
+            print(f"[cloud] target inválido '{msg_target}' de {edge}. Ignorado.")
+            continue
+
+        ek = edge_key_for(edge)
+        try:
+            dec_start = time.time()
+            dec = decrypt(ek, bytes.fromhex(msg["bytes"]))
+            dec_ms = (time.time() - dec_start) * 1000.0
+            we = np.frombuffer(dec, dtype=np.float32)
+        except Exception as e:
+            print(f"[cloud] erro decriptando modelo de {edge}: {e}")
+            continue
+
+        if we.shape != w_global[msg_target].shape:
+            print(f"[cloud] SHAPE MISMATCH de {edge}: recebido={we.shape}, esperado={w_global[msg_target].shape}. Ignorado.")
+            continue
+
+        edge_meta[msg_target][edge]["p"] = float(msg.get("pactual", 0.0))
+        edge_meta[msg_target][edge]["q"] = float(msg.get("qedge", 1.0))
+        edge_last[msg_target][edge] = we
+
+        # Aguarda todos os edges esperados antes de agregar
+        if not _cloud_ready():
+            try:
+                send_teacher = TEACHER_ENABLE and TEACHER_PUSH_EVERY > 0 and round_ctr % TEACHER_PUSH_EVERY == 0
+                teacher_payload = teacher_weights.get(msg_target) if send_teacher else None
+                tx_wait = mqtt_bus.publish_json(_cloud_down_topic(edge), {
+                    "type": "model",
+                    "whex": w_global[msg_target].tobytes().hex(),
+                    "round": round_ctr,
+                    "target": msg_target,
+                    "ve": float(beta_cloud * edge_meta[msg_target][edge]["p"] + (1.0 - beta_cloud) * edge_meta[msg_target][edge]["q"]),
+                    "teacher_whex": teacher_payload.tobytes().hex() if teacher_payload is not None else None,
+                    "teacher_version": teacher_version.get(msg_target),
+                    "teacher_score": (teacher_metrics_by_target.get(msg_target, {}) or {}).get("teacher_score"),
+                    "ready": False,
+                    "expected_edges": sorted(CLOUD_EXPECTED_EDGES) if CLOUD_EXPECTED_EDGES else None,
+                })
+                log_event(
+                    "cloud",
+                    event="mqtt_tx",
+                    edge=edge,
+                    topic=_cloud_down_topic(edge),
+                    msg_type="model",
+                    target=msg_target,
+                    ready=False,
+                    **(tx_wait or {}),
+                )
+            except Exception:
+                pass
+            continue
+
+        # Agregação por target
+        num = np.zeros_like(w_global[msg_target], dtype=np.float32)
+        den = 0.0
+        for e_id, w in edge_last[msg_target].items():
+            meta = edge_meta[msg_target][e_id]
+            v = beta_cloud * meta["p"] + (1.0 - beta_cloud) * meta["q"]
+            num += v * w
+            den += v
+        if den > 0:
+            w_global[msg_target] = num / den
+
+        round_ctr += 1
+
+        # Avaliação por target
+        target_metrics = {}
+        for t in TARGETS:
+            metrics = _evaluate_target(t, w_global[t])
+            if not metrics:
                 continue
+            key = _slug(t)
+            target_metrics[f"global_{key}_rmse"] = metrics["rmse"]
+            target_metrics[f"global_{key}_mae"] = metrics["mae"]
+            if "r2" in metrics:
+                target_metrics[f"global_{key}_r2"] = metrics.get("r2")
+            if "mape" in metrics:
+                target_metrics[f"global_{key}_mape"] = metrics.get("mape")
+            target_metrics[f"global_{key}_score"] = metrics["score"]
+            target_metrics[f"global_{key}_loss"] = metrics["loss"]
+            if "acc" in metrics:
+                target_metrics[f"global_{key}_acc"] = metrics.get("acc")
+            if "precision" in metrics:
+                target_metrics[f"global_{key}_precision"] = metrics.get("precision")
+            if "recall" in metrics:
+                target_metrics[f"global_{key}_recall"] = metrics.get("recall")
+            if "f1" in metrics:
+                target_metrics[f"global_{key}_f1"] = metrics.get("f1")
 
-            edge_meta[msg_target][edge]["p"] = float(msg.get("pactual", 0.0))
-            edge_meta[msg_target][edge]["q"] = float(msg.get("qedge", 1.0))
-            handler.edge_last[msg_target][edge] = we
+        # Métricas globais compatíveis (do target atualizado)
+        cur_key = _slug(msg_target)
+        global_rmse = target_metrics.get(f"global_{cur_key}_rmse")
+        global_mae = target_metrics.get(f"global_{cur_key}_mae")
+        global_r2 = target_metrics.get(f"global_{cur_key}_r2")
+        global_mape = target_metrics.get(f"global_{cur_key}_mape")
+        global_score = target_metrics.get(f"global_{cur_key}_score")
+        global_loss = target_metrics.get(f"global_{cur_key}_loss")
+        global_acc = target_metrics.get(f"global_{cur_key}_acc")
+        global_precision = target_metrics.get(f"global_{cur_key}_precision")
+        global_recall = target_metrics.get(f"global_{cur_key}_recall")
+        global_f1 = target_metrics.get(f"global_{cur_key}_f1")
 
-            # Aguarda todos os edges esperados antes de agregar
-            if not _cloud_ready():
-                try:
-                    send_teacher = TEACHER_ENABLE and TEACHER_PUSH_EVERY > 0 and round_ctr % TEACHER_PUSH_EVERY == 0
-                    teacher_payload = teacher_weights.get(msg_target) if send_teacher else None
-                    await ws.send(json.dumps({
-                        "type": "model",
-                        "whex": w_global[msg_target].tobytes().hex(),
-                        "round": round_ctr,
-                        "target": msg_target,
-                        "ve": float(beta_cloud * edge_meta[msg_target][edge]["p"] + (1.0 - beta_cloud) * edge_meta[msg_target][edge]["q"]),
-                        "teacher_whex": teacher_payload.tobytes().hex() if teacher_payload is not None else None,
-                        "teacher_version": teacher_version.get(msg_target),
-                        "teacher_score": (teacher_metrics_by_target.get(msg_target, {}) or {}).get("teacher_score"),
-                        "ready": False,
-                        "expected_edges": sorted(CLOUD_EXPECTED_EDGES) if CLOUD_EXPECTED_EDGES else None,
-                    }))
-                except Exception:
-                    pass
-                continue
+        # Persistir pesos globais (opcional)
+        if SAVE_WEIGHTS and round_ctr % max(1, SAVE_EVERY) == 0:
+            try:
+                WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+                fname = f"cloud_{cur_key}_round_{round_ctr:04d}.npy"
+                np.save(WEIGHTS_DIR / fname, w_global[msg_target].astype("float32"))
+            except Exception as e:
+                print(f"[cloud] falha salvando pesos: {e}")
 
-            # Agregação por target
-            num = np.zeros_like(w_global[msg_target], dtype=np.float32)
-            den = 0.0
-            for e_id, w in handler.edge_last[msg_target].items():
-                meta = edge_meta[msg_target][e_id]
-                v = beta_cloud * meta["p"] + (1.0 - beta_cloud) * meta["q"]
-                num += v * w
-                den += v
-            if den > 0:
-                w_global[msg_target] = num / den
+        # Server-side fine-tuning (student) on proxy data
+        server_ft_metrics = {}
+        if SERVER_FT_EVERY > 0 and SERVER_FT_EPOCHS > 0 and round_ctr % SERVER_FT_EVERY == 0:
+            w_new, metrics_ft = _server_finetune(msg_target, w_global[msg_target])
+            if w_new is not None:
+                w_global[msg_target] = w_new
+            if metrics_ft:
+                server_ft_metrics.update(metrics_ft)
 
-            round_ctr += 1
+        # 🔹 Broadcast do modelo para todos os edges
+        ve_map = {}
+        for e_id, t in edge_target.items():
+            meta = edge_meta[t].get(e_id, {"p": 0.0, "q": 1.0})
+            ve_map[e_id] = float(beta_cloud * meta["p"] + (1.0 - beta_cloud) * meta["q"])
 
-            # Avaliação por target
-            target_metrics = {}
-            for t in TARGETS:
-                metrics = _evaluate_target(t, w_global[t])
-                if not metrics:
-                    continue
+        send_teacher = TEACHER_ENABLE and TEACHER_PUSH_EVERY > 0 and round_ctr % TEACHER_PUSH_EVERY == 0
+        for e_id, t in edge_target.items():
+            try:
+                teacher_payload = teacher_weights.get(t) if send_teacher else None
+                tx_model = mqtt_bus.publish_json(_cloud_down_topic(e_id), {
+                    "type": "model",
+                    "whex": w_global[t].tobytes().hex(),
+                    "round": round_ctr,
+                    "target": t,
+                    "ve": ve_map.get(e_id, 1.0),
+                    "teacher_whex": teacher_payload.tobytes().hex() if teacher_payload is not None else None,
+                    "teacher_version": teacher_version.get(t),
+                    "teacher_score": (teacher_metrics_by_target.get(t, {}) or {}).get("teacher_score"),
+                })
+                log_event(
+                    "cloud",
+                    event="mqtt_tx",
+                    edge=e_id,
+                    topic=_cloud_down_topic(e_id),
+                    msg_type="model",
+                    target=t,
+                    ready=True,
+                    **(tx_model or {}),
+                )
+                print(f"[cloud] modelo global enviado -> {e_id}, round={round_ctr}, target={t}")
+            except Exception as e:
+                print(f"[cloud] erro enviando modelo para {e_id}: {e}")
+
+        # Inclui métricas do teacher (constantes) se disponíveis
+        teacher_metrics = {}
+        if teacher_metrics_by_target:
+            for t, vals in teacher_metrics_by_target.items():
                 key = _slug(t)
-                target_metrics[f"global_{key}_rmse"] = metrics["rmse"]
-                target_metrics[f"global_{key}_mae"] = metrics["mae"]
-                if "r2" in metrics:
-                    target_metrics[f"global_{key}_r2"] = metrics.get("r2")
-                if "mape" in metrics:
-                    target_metrics[f"global_{key}_mape"] = metrics.get("mape")
-                target_metrics[f"global_{key}_score"] = metrics["score"]
-                target_metrics[f"global_{key}_loss"] = metrics["loss"]
-                if "acc" in metrics:
-                    target_metrics[f"global_{key}_acc"] = metrics.get("acc")
-                if "precision" in metrics:
-                    target_metrics[f"global_{key}_precision"] = metrics.get("precision")
-                if "recall" in metrics:
-                    target_metrics[f"global_{key}_recall"] = metrics.get("recall")
-                if "f1" in metrics:
-                    target_metrics[f"global_{key}_f1"] = metrics.get("f1")
+                for mk, mv in vals.items():
+                    teacher_metrics[f"{key}_{mk}"] = mv
 
-            # Métricas globais compatíveis (do target atualizado)
-            cur_key = _slug(msg_target)
-            global_rmse = target_metrics.get(f"global_{cur_key}_rmse")
-            global_mae = target_metrics.get(f"global_{cur_key}_mae")
-            global_r2 = target_metrics.get(f"global_{cur_key}_r2")
-            global_mape = target_metrics.get(f"global_{cur_key}_mape")
-            global_score = target_metrics.get(f"global_{cur_key}_score")
-            global_loss = target_metrics.get(f"global_{cur_key}_loss")
-            global_acc = target_metrics.get(f"global_{cur_key}_acc")
-            global_precision = target_metrics.get(f"global_{cur_key}_precision")
-            global_recall = target_metrics.get(f"global_{cur_key}_recall")
-            global_f1 = target_metrics.get(f"global_{cur_key}_f1")
+        log_metric(
+            "cloud",
+            round=round_ctr,
+            target=msg_target,
+            task=_task(msg_target),
+            edges=len(edge_last.get(msg_target, {})),
+            beta_cloud=beta_cloud,
+            global_loss=global_loss,
+            global_mae=global_mae,
+            global_rmse=global_rmse,
+            global_r2=global_r2,
+            global_mape=global_mape,
+            global_score=global_score,
+            global_acc=global_acc,
+            global_precision=global_precision,
+            global_recall=global_recall,
+            global_f1=global_f1,
+            dec_ms=dec_ms,
+            payload_bytes=msg.get("payload_bytes"),
+            **target_metrics,
+            **teacher_metrics,
+            **server_ft_metrics,
+        )
 
-            # Persistir pesos globais (opcional)
-            if SAVE_WEIGHTS and round_ctr % max(1, SAVE_EVERY) == 0:
-                try:
-                    WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
-                    fname = f"cloud_{cur_key}_round_{round_ctr:04d}.npy"
-                    np.save(WEIGHTS_DIR / fname, w_global[msg_target].astype("float32"))
-                except Exception as e:
-                    print(f"[cloud] falha salvando pesos: {e}")
-
-            # Server-side fine-tuning (student) on proxy data
-            server_ft_metrics = {}
-            if SERVER_FT_EVERY > 0 and SERVER_FT_EPOCHS > 0 and round_ctr % SERVER_FT_EVERY == 0:
-                w_new, metrics_ft = _server_finetune(msg_target, w_global[msg_target])
-                if w_new is not None:
-                    w_global[msg_target] = w_new
-                if metrics_ft:
-                    server_ft_metrics.update(metrics_ft)
-
-            # 🔹 Broadcast do modelo para todos os edges
-            dead = []
-            ve_map = {}
-            for e_id, t in edge_target.items():
-                meta = edge_meta[t].get(e_id, {"p": 0.0, "q": 1.0})
-                ve_map[e_id] = float(beta_cloud * meta["p"] + (1.0 - beta_cloud) * meta["q"])
-
-            send_teacher = TEACHER_ENABLE and TEACHER_PUSH_EVERY > 0 and round_ctr % TEACHER_PUSH_EVERY == 0
-            for e_id, peer_ws in list(peers.items()):
-                t = edge_target.get(e_id, TARGETS[0])
-                key = _slug(t)
-                try:
-                    teacher_payload = teacher_weights.get(t) if send_teacher else None
-                    await peer_ws.send(json.dumps({
-                        "type": "model",
-                        "whex": w_global[t].tobytes().hex(),
-                        "round": round_ctr,
-                        "target": t,
-                        "ve": ve_map.get(e_id, 1.0),
-                        "teacher_whex": teacher_payload.tobytes().hex() if teacher_payload is not None else None,
-                        "teacher_version": teacher_version.get(t),
-                        "teacher_score": (teacher_metrics_by_target.get(t, {}) or {}).get("teacher_score"),
-                    }))
-                    print(f"[cloud] modelo global enviado -> {e_id}, round={round_ctr}, target={t}")
-                except Exception as e:
-                    print(f"[cloud] erro enviando modelo para {e_id}: {e}")
-                    dead.append(e_id)
-            for e_id in dead:
-                peers.pop(e_id, None)
-
-            # Inclui métricas do teacher (constantes) se disponíveis
-            teacher_metrics = {}
-            if teacher_metrics_by_target:
-                for t, vals in teacher_metrics_by_target.items():
-                    key = _slug(t)
-                    for mk, mv in vals.items():
-                        teacher_metrics[f"{key}_{mk}"] = mv
-
-            log_metric(
-                "cloud",
-                round=round_ctr,
-                target=msg_target,
-                task=_task(msg_target),
-                edges=len(handler.edge_last.get(msg_target, {})),
-                beta_cloud=beta_cloud,
-                global_loss=global_loss,
-                global_mae=global_mae,
-                global_rmse=global_rmse,
-                global_r2=global_r2,
-                global_mape=global_mape,
-                global_score=global_score,
-                global_acc=global_acc,
-                global_precision=global_precision,
-                global_recall=global_recall,
-                global_f1=global_f1,
-                dec_ms=dec_ms,
-                payload_bytes=msg.get("payload_bytes"),
-                **target_metrics,
-                **teacher_metrics,
-                **server_ft_metrics,
-            )
-
-            # Opcional: refresh do teacher
-            if TEACHER_ENABLE and TEACHER_REFRESH_EVERY > 0 and round_ctr % TEACHER_REFRESH_EVERY == 0:
-                model, metrics = _train_teacher(msg_target)
-                if model is not None:
-                    teacher_weights[msg_target] = get_weights_vector(model)
-                    teacher_version[msg_target] = int(teacher_version.get(msg_target, 0)) + 1
-                    if metrics:
-                        teacher_metrics_by_target[msg_target] = metrics
-
-    finally:
-        print(f"[cloud] handler encerrado para {edge}")
-        peers.pop(edge, None)
-
-
+        # Opcional: refresh do teacher
+        if TEACHER_ENABLE and TEACHER_REFRESH_EVERY > 0 and round_ctr % TEACHER_REFRESH_EVERY == 0:
+            model, metrics = _train_teacher(msg_target)
+            if model is not None:
+                teacher_weights[msg_target] = get_weights_vector(model)
+                teacher_version[msg_target] = int(teacher_version.get(msg_target, 0)) + 1
+                if metrics:
+                    teacher_metrics_by_target[msg_target] = metrics
 async def main():
     global w_global, eval_models, X_test_by_target, teacher_weights, teacher_version, teacher_metrics_by_target, proxy_train_by_target
 
     # Inicializa pesos globais (student) por target
     w_global = {}
     eval_models = {}
+    edge_last.clear()
     for t in TARGETS:
         task_name = _task(t)
         model = build_model(kind="student", task=task_name)
@@ -585,10 +614,20 @@ async def main():
             teacher_models[t] = model
             log_event("cloud", event="teacher_trained", target=t, **(metrics or {}))
 
-    log_event("cloud", event="start", port=PORT, targets=TARGETS, tasks=TARGET_TASKS)
+    log_event(
+        "cloud",
+        event="start",
+        targets=TARGETS,
+        tasks=TARGET_TASKS,
+        mqtt_host=MQTT_HOST,
+        mqtt_port=MQTT_PORT,
+        mqtt_base=MQTT_BASE,
+        mqtt_qos=MQTT_QOS,
+        mqtt_keepalive=MQTT_KEEPALIVE,
+    )
     any_weights = next(iter(w_global.values())) if w_global else np.array([], dtype=np.float32)
-    print(f"[cloud] iniciado na porta {PORT}, targets={TARGETS}, pesos iniciais n={any_weights.size}")
-    await ws_server("0.0.0.0", PORT, handler)
+    print(f"[cloud] iniciado (MQTT) targets={TARGETS}, pesos iniciais n={any_weights.size}")
+    await mqtt_loop()
 
 
 if __name__ == "__main__":

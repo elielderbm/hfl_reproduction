@@ -1,7 +1,7 @@
 # Projeto
 
 Implementação das camadas **IoT**, **Edge** e **Cloud** com:
-- **WebSockets** para comunicação
+- **MQTT (pub/sub)** para comunicação entre camadas
 - **Salsa20** (criptografia leve) para updates de modelo
 - **Agregação Assíncrona** no Edge com janela deslizante
 - **Agregação Global Ponderada** no Cloud

@@ -1,6 +1,6 @@
 import os, asyncio, json, time, numpy as np, random
 import tensorflow as tf
-from project.common.messaging import ws_connect, b64e
+from project.common.messaging import MQTTBus, b64e
 from project.common.crypto import encrypt
 from project.common.model import build_model, compile_model, get_weights_vector, set_weights_vector
 from project.common.logging_utils import log_event, log_metric
@@ -10,7 +10,10 @@ from project.common.data_utils import load_client_split, unscale_target
 from project.common.dataset_config import load_dataset_config, task_for_target
 
 IOT_ID = os.getenv("IOT_ID", "iot1")
-EDGE_URI = os.getenv("EDGE_URI", "ws://edge1:8765")
+EDGE_ID = os.getenv("EDGE_ID", "edge1")
+MQTT_BASE = os.getenv("MQTT_BASE_TOPIC", "hfl")
+MQTT_HOST = os.getenv("MQTT_HOST", "mosquitto")
+MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 IOT_KEY_HEX = os.getenv("IOT_KEY_HEX", "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF")
 GLOBAL_SEED = int(os.getenv("GLOBAL_SEED", "42"))
 random.seed(GLOBAL_SEED); np.random.seed(GLOBAL_SEED)
@@ -101,7 +104,7 @@ async def run_iot():
         teacher_model = build_model(kind="cloud_teacher", task=TASK)
         compile_model(teacher_model, lr=hp["eta"], loss=loss_fn, task=TASK)
 
-    log_event("iot", iot=IOT_ID, event="start", edge=EDGE_URI, target=TARGET)
+    log_event("iot", iot=IOT_ID, event="start", edge=EDGE_ID, target=TARGET)
 
     if len(ytr) == 0:
         log_event("iot", iot=IOT_ID, event="no_data")
@@ -129,20 +132,90 @@ async def run_iot():
     )
 
     backoff = 1.0
+    up_topic = f"{MQTT_BASE}/edge/{EDGE_ID}/iot/up"
+    down_topic = f"{MQTT_BASE}/edge/{EDGE_ID}/iot/down/{IOT_ID}"
+
     while round_ctr < hp["T"]:
-        ws = None
+        bus = None
         try:
-            ws = await ws_connect(EDGE_URI)
+            bus = MQTTBus(client_id=f"{IOT_ID}-mqtt", host=MQTT_HOST, port=MQTT_PORT)
+            await bus.connect()
+            bus.subscribe(down_topic)
             backoff = 1.0
-            # hello
-            await ws.send(json.dumps({"type": "hello", "iot": IOT_ID, "target": TARGET}))
-            msg = json.loads(await ws.recv())
-            assert msg["type"] == "init"
+            # hello (com retry se o edge ainda não estiver pronto)
+            hello_backoff = 1.0
+            while True:
+                tx = bus.publish_json(up_topic, {"type": "hello", "iot": IOT_ID, "target": TARGET})
+                log_event(
+                    "iot",
+                    iot=IOT_ID,
+                    event="mqtt_tx",
+                    topic=up_topic,
+                    msg_type="hello",
+                    **(tx or {}),
+                )
+                try:
+                    topic, msg, meta = await bus.recv_match(
+                        lambda t, m: t == down_topic and m.get("type") == "init",
+                        timeout=10,
+                    )
+                except asyncio.TimeoutError:
+                    log_event(
+                        "iot",
+                        iot=IOT_ID,
+                        event="mqtt_timeout",
+                        stage="wait_init",
+                        wait_s=10,
+                    )
+                    await asyncio.sleep(hello_backoff)
+                    hello_backoff = min(hello_backoff * 2.0, 15.0)
+                    continue
+                log_event(
+                    "iot",
+                    iot=IOT_ID,
+                    event="mqtt_rx",
+                    topic=topic,
+                    msg_type=msg.get("type"),
+                    **(meta or {}),
+                )
+                break
             if IOT_WAIT_FOR_READY and msg.get("ready") is False:
+                start_backoff = 1.0
                 while True:
-                    wait_msg = json.loads(await ws.recv())
-                    if wait_msg.get("type") == "start":
-                        break
+                    try:
+                        topic, start_msg, meta = await bus.recv_match(
+                            lambda t, m: t == down_topic and m.get("type") == "start",
+                            timeout=15,
+                        )
+                    except asyncio.TimeoutError:
+                        log_event(
+                            "iot",
+                            iot=IOT_ID,
+                            event="mqtt_timeout",
+                            stage="wait_start",
+                            wait_s=15,
+                        )
+                        tx = bus.publish_json(up_topic, {"type": "hello", "iot": IOT_ID, "target": TARGET})
+                        log_event(
+                            "iot",
+                            iot=IOT_ID,
+                            event="mqtt_tx",
+                            topic=up_topic,
+                            msg_type="hello",
+                            **(tx or {}),
+                        )
+                        await asyncio.sleep(start_backoff)
+                        start_backoff = min(start_backoff * 2.0, 15.0)
+                        continue
+                    log_event(
+                        "iot",
+                        iot=IOT_ID,
+                        event="mqtt_rx",
+                        topic=topic,
+                        msg_type=start_msg.get("type"),
+                        **(meta or {}),
+                    )
+                    break
             wg = np.frombuffer(bytes.fromhex(msg["whex"]), dtype=np.float32)
             set_weights_vector(local_model, wg)
             w_local = wg.copy()
@@ -258,7 +331,7 @@ async def run_iot():
                 enc_start = time.time()
                 enc = encrypt(IOT_KEY_HEX, payload)
                 enc_ms = (time.time() - enc_start) * 1000.0
-                await ws.send(json.dumps({
+                tx = bus.publish_json(up_topic, {
                     "type": "update",
                     "iot": IOT_ID,
                     "target": TARGET,
@@ -289,11 +362,28 @@ async def run_iot():
                     "val_recall": val_recall,
                     "val_f1": val_f1,
                     "payload_bytes": len(enc)
-                }))
+                })
+                log_event(
+                    "iot",
+                    iot=IOT_ID,
+                    event="mqtt_tx",
+                    topic=up_topic,
+                    msg_type="update",
+                    round=round_ctr,
+                    **(tx or {}),
+                )
 
                 # recebe modelo atualizado do edge
-                reply = json.loads(await ws.recv())
-                assert reply["type"] == "model"
+                topic, reply, meta = await bus.recv_match(lambda t, m: t == down_topic and m.get("type") == "model")
+                log_event(
+                    "iot",
+                    iot=IOT_ID,
+                    event="mqtt_rx",
+                    topic=topic,
+                    msg_type=reply.get("type"),
+                    round=round_ctr,
+                    **(meta or {}),
+                )
                 w_edge = np.frombuffer(bytes.fromhex(reply["whex"]), dtype=np.float32)
                 set_weights_vector(local_model, w_edge)
                 w_local = w_edge.copy()
@@ -342,6 +432,8 @@ async def run_iot():
                     delay_ms=delay_s * 1000.0,
                     round_time_ms=round_time_ms,
                     payload_bytes=len(enc),
+                    mqtt_payload_bytes=(tx or {}).get("mqtt_payload_bytes"),
+                    mqtt_packet_bytes=(tx or {}).get("mqtt_packet_bytes"),
                     **w_stats,
                 )
         except Exception as e:
@@ -349,11 +441,8 @@ async def run_iot():
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2.0, 30.0)
         finally:
-            if ws is not None:
-                try:
-                    await ws.close()
-                except Exception:
-                    pass
+            # MQTT client runs in background thread; nothing explicit to close here
+            pass
 
 def main():
     asyncio.run(run_iot())

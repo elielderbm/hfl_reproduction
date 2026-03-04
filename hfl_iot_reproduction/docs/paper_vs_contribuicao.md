@@ -16,7 +16,7 @@ A tabela abaixo sintetiza **o que permanece fiel ao artigo** e **o que foi esten
 | Teacher/Student | Não explicitado | Teacher robusto no Cloud e teacher moderado no Edge | Melhora inferência sem quebrar compatibilidade de pesos |
 | Fine‑tuning | Não descrito | **Fine‑tuning no Edge/Cloud** em dados proxy | Ajusta o global sem alterar regra de agregação |
 | Segurança | Privacidade por agregação | **Criptografia Salsa20** nos updates | Medida prática de confidencialidade no transporte |
-| Comunicação | Não especifica stack | **WebSocket full‑duplex** | Aproxima da execução em ambiente real |
+| Comunicação | Não especifica stack | **MQTT (pub/sub) com broker** | Aproxima da execução em ambiente real e reduz acoplamento |
 | Métricas | Erro/qualidade globais | Métricas ampliadas (RMSE/MAE/R2/MAPE + BCE/Acc/F1) | Avaliação mais completa, multi‑tarefa |
 | Avaliação por target | Não requerido | **Relatórios por target** (temp, humidity, light) | Permite análise isolada de cada tarefa |
 | Contribuição científica | Método HFL | Extensão para **heterogeneidade de tarefas + modelos** | Expansão da aplicabilidade do método |
