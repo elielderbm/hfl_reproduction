@@ -68,7 +68,6 @@ def main():
     metrics = df[df["type"] == "metric"].copy()
 
     iot = metrics[metrics["file"].str.startswith("iot")].copy()
-    edge = metrics[metrics["file"].str.startswith("edge")].copy()
     cloud = metrics[metrics["file"].str.startswith("cloud")].copy()
 
     # 1) IoT training time (per device)
@@ -122,6 +121,16 @@ def main():
         _write_csv(cloud_mape, "paper_global_mape.csv")
         _plot_line(cloud_mape, "round", "global_mape", "Global MAPE", "paper_global_mape.png", hue="target" if "target" in cloud.columns else None)
 
+    # 2d) Global Accuracy (cloud, classification)
+    cloud_acc = pd.DataFrame()
+    if not cloud.empty and "global_acc" in cloud.columns:
+        cols = ["round", "global_acc"]
+        if "target" in cloud.columns:
+            cols.append("target")
+        cloud_acc = cloud[cols].dropna().sort_values("round")
+        _write_csv(cloud_acc, "paper_global_acc.csv")
+        _plot_line(cloud_acc, "round", "global_acc", "Global Acc", "paper_global_acc.png", hue="target" if "target" in cloud.columns else None)
+
     # 3) Round time (cloud _ts delta)
     round_time = pd.DataFrame()
     if not cloud.empty and "_ts" in cloud.columns:
@@ -131,23 +140,26 @@ def main():
         _write_csv(round_time, "paper_round_time.csv")
         _plot_line(round_time, "round", "round_time_s", "Round Time (s)", "paper_round_time.png")
 
-    # 4) Throughput (edge payload_bytes / delta_t)
+    # 4) Throughput (cloud payload_bytes / delta_t)
     throughput = pd.DataFrame()
-    if not edge.empty and "_ts" in edge.columns and "payload_bytes" in edge.columns:
+    if not cloud.empty and "_ts" in cloud.columns and "payload_bytes" in cloud.columns:
         rows = []
-        for edge_id, sub in edge.sort_values("_ts").groupby("edge"):
+        groups = cloud.sort_values("_ts").groupby("target") if "target" in cloud.columns else [("global", cloud)]
+        for target, sub in groups:
             sub = sub.copy()
             sub["delta_s"] = sub["_ts"].diff() / 1000.0
             sub = sub[sub["delta_s"] > 0]
             sub["throughput_kbps"] = (sub["payload_bytes"] / 1024.0) / sub["delta_s"]
-            tmp = sub[["edge", "throughput_kbps"]].dropna()
-            rows.append(tmp)
+            tmp = sub[["throughput_kbps"]].dropna().copy()
+            if not tmp.empty:
+                tmp["target"] = target
+                rows.append(tmp)
         if rows:
             throughput = pd.concat(rows, ignore_index=True)
             _write_csv(throughput, "paper_throughput.csv")
             _plot_bar(
-                throughput.groupby("edge", dropna=False)["throughput_kbps"].mean().reset_index(),
-                "edge",
+                throughput.groupby("target", dropna=False)["throughput_kbps"].mean().reset_index(),
+                "target",
                 "throughput_kbps",
                 "Throughput (KB/s)",
                 "paper_throughput.png",
@@ -157,8 +169,6 @@ def main():
     overhead_rows = []
     if not iot.empty and "enc_ms" in iot.columns:
         overhead_rows.append({"layer": "iot_encrypt_ms", "mean_ms": _safe_mean(iot["enc_ms"])})
-    if not edge.empty and "dec_ms_mean" in edge.columns:
-        overhead_rows.append({"layer": "edge_decrypt_ms", "mean_ms": _safe_mean(edge["dec_ms_mean"])})
     if not cloud.empty and "dec_ms" in cloud.columns:
         overhead_rows.append({"layer": "cloud_decrypt_ms", "mean_ms": _safe_mean(cloud["dec_ms"])})
     overhead = pd.DataFrame(overhead_rows)
@@ -166,17 +176,24 @@ def main():
         _write_csv(overhead, "paper_overhead.csv")
         _plot_bar(overhead, "layer", "mean_ms", "Crypto Overhead (ms)", "paper_overhead.png")
 
+    iot_acc_last_mean = None
+    if not iot.empty:
+        acc_col = "val_acc" if "val_acc" in iot.columns else ("train_acc" if "train_acc" in iot.columns else None)
+        if acc_col:
+            iot_acc_last_mean = _safe_mean(iot.sort_values("round").groupby("iot")[acc_col].last())
+
     # Summary
     summary = {
         "iot_train_time_ms_mean": _safe_mean(iot["train_time_ms"]) if "train_time_ms" in iot.columns else None,
+        "iot_acc_last_mean": iot_acc_last_mean,
         "global_rmse_last": float(cloud_rmse["global_rmse"].dropna().iloc[-1]) if not cloud_rmse.empty else None,
         "global_score_last": float(cloud_score["global_score"].dropna().iloc[-1]) if not cloud_score.empty else None,
         "global_r2_last": float(cloud_r2["global_r2"].dropna().iloc[-1]) if not cloud_r2.empty else None,
         "global_mape_last": float(cloud_mape["global_mape"].dropna().iloc[-1]) if not cloud_mape.empty else None,
+        "global_acc_last": float(cloud_acc["global_acc"].dropna().iloc[-1]) if not cloud_acc.empty else None,
         "round_time_s_mean": _safe_mean(round_time["round_time_s"]) if not round_time.empty else None,
         "throughput_kbps_mean": _safe_mean(throughput["throughput_kbps"]) if not throughput.empty else None,
         "iot_enc_ms_mean": _safe_mean(iot["enc_ms"]) if "enc_ms" in iot.columns else None,
-        "edge_dec_ms_mean": _safe_mean(edge["dec_ms_mean"]) if "dec_ms_mean" in edge.columns else None,
         "cloud_dec_ms_mean": _safe_mean(cloud["dec_ms"]) if "dec_ms" in cloud.columns else None,
     }
     summary_df = pd.DataFrame([summary])

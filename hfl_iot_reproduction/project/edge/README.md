@@ -1,5 +1,7 @@
 # Edge (Agregação Assíncrona)
 
+> **Nota:** esta camada não é utilizada no modo centralizado (IoT → Cloud).
+
 - Recebe atualizações dos IoTs conectados (WebSocket :8765).
 - **Janela deslizante adaptativa**: `window = window + alpha_sw * (pdesired - pactual)`.
 - Agregação: `w_e = (alpha_edge * w_e + beta_edge * sum(w_i)) / (alpha_edge + beta_edge*|A|)`.

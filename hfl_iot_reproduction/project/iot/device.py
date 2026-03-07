@@ -10,7 +10,7 @@ from project.common.data_utils import load_client_split, unscale_target
 from project.common.dataset_config import load_dataset_config, task_for_target
 
 IOT_ID = os.getenv("IOT_ID", "iot1")
-EDGE_URI = os.getenv("EDGE_URI", "ws://edge1:8765")
+EDGE_URI = os.getenv("EDGE_URI", "ws://cloud:9000")
 IOT_KEY_HEX = os.getenv("IOT_KEY_HEX", "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF")
 GLOBAL_SEED = int(os.getenv("GLOBAL_SEED", "42"))
 random.seed(GLOBAL_SEED); np.random.seed(GLOBAL_SEED)
@@ -249,6 +249,30 @@ async def run_iot():
                             val_loss = val_mae = val_rmse = val_r2 = val_mape = None
                         val_score = score_from_rmse(val_rmse)
 
+                # métricas principais por tipo de tarefa (para console + análise)
+                reg_metric = None
+                class_metric = None
+                if TASK == "classification":
+                    class_metric = val_acc if val_acc is not None else train_acc
+                else:
+                    reg_metric = val_rmse if val_rmse is not None else train_rmse
+
+                def _fmt_metric(v):
+                    if v is None:
+                        return "n/a"
+                    try:
+                        fv = float(v)
+                    except Exception:
+                        return "n/a"
+                    if not np.isfinite(fv):
+                        return "n/a"
+                    return f"{fv:.4f}"
+
+                print(
+                    f"[iot] {IOT_ID} round={round_ctr} target={TARGET} "
+                    f"reg_rmse={_fmt_metric(reg_metric)} class_acc={_fmt_metric(class_metric)}"
+                )
+
                 # delay heterogêneo ~ N(mu, sigma)
                 delay_s = max(0.0, random.gauss(hp["delay_mu"], hp["delay_sigma"]))
                 if delay_s > 0:
@@ -337,6 +361,8 @@ async def run_iot():
                     val_precision=val_precision,
                     val_recall=val_recall,
                     val_f1=val_f1,
+                    reg_metric=reg_metric,
+                    class_metric=class_metric,
                     train_time_ms=train_time_ms,
                     enc_ms=enc_ms,
                     delay_ms=delay_s * 1000.0,

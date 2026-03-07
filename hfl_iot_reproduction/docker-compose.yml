@@ -43,7 +43,6 @@ services:
       - TEACHER_PUSH_INIT=${TEACHER_PUSH_INIT:-0}
       - TEACHER_PUSH_EVERY=${TEACHER_PUSH_EVERY:-0}
       - CLOUD_WAIT_FOR_EDGES=${CLOUD_WAIT_FOR_EDGES:-1}
-      - CLOUD_EXPECTED_EDGES=${CLOUD_EXPECTED_EDGES:-edge1,edge2}
       - SERVER_FT_EPOCHS=${SERVER_FT_EPOCHS:-2}
       - SERVER_FT_BATCH=${SERVER_FT_BATCH:-128}
       - SERVER_FT_EVERY=${SERVER_FT_EVERY:-1}
@@ -67,6 +66,8 @@ services:
       - SAVE_GLOBAL_WEIGHTS_EVERY=${SAVE_GLOBAL_WEIGHTS_EVERY:-1}
       - WEIGHTS_DIR=${WEIGHTS_DIR:-/workspace/outputs/weights}
       - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
+      - WS_PING_INTERVAL=${WS_PING_INTERVAL:-0}
+      - WS_PING_TIMEOUT=${WS_PING_TIMEOUT:-0}
       - PYTHONUNBUFFERED=1
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
@@ -85,204 +86,6 @@ services:
     depends_on:
       - data_prep
 
-  edge1:
-    build:
-      context: .
-      dockerfile: docker/edge.Dockerfile
-    image: hfl_edge:latest
-    container_name: edge1
-    environment:
-      - ROLE=edge
-      - EDGE_ID=edge1
-      - EDGE_TARGET=${EDGE1_TARGET:-temp}
-      - PYTHONUNBUFFERED=1
-      - EDGE_KEY_HEX=00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF
-      - SYNC_MODE=${SYNC_MODE:-0}
-      - EDGE_CLIENTS=${EDGE1_CLIENTS:-iot1,iot2}
-      - OPTIMIZER=${OPTIMIZER:-sgd}
-      - CLIP_NORM=${CLIP_NORM:-1.0}
-      - LOSS_FN=${LOSS_FN:-huber}
-      - LOSS_FN_CLASSIF=${LOSS_FN_CLASSIF:-binary_crossentropy}
-      - HUBER_DELTA=${HUBER_DELTA:-1.0}
-      - EDGE_WAIT_FOR_IOTS=${EDGE_WAIT_FOR_IOTS:-1}
-      - EDGE_WAIT_FOR_CLOUD=${EDGE_WAIT_FOR_CLOUD:-1}
-      - EDGE_EXPECTED_IOTS=${EDGE1_EXPECTED_IOTS:-iot1,iot2}
-      - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
-      - OUT_DIR=${OUT_DIR:-/workspace/outputs}
-      - EDGE_WEIGHT_BY_SAMPLES=${EDGE_WEIGHT_BY_SAMPLES:-1}
-      - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
-      - EDGE_FT_EPOCHS=${EDGE_FT_EPOCHS:-2}
-      - EDGE_FT_BATCH=${EDGE_FT_BATCH:-128}
-      - EDGE_FT_EVERY=${EDGE_FT_EVERY:-1}
-      - EDGE_FT_MAX_SAMPLES=${EDGE_FT_MAX_SAMPLES:-0}
-      - EDGE_FT_ALPHA=${EDGE_FT_ALPHA:-0.1}
-      - EDGE_TEACHER_ENABLE=${EDGE_TEACHER_ENABLE:-0}
-      - EDGE_TEACHER_EPOCHS=${EDGE_TEACHER_EPOCHS:-5}
-      - EDGE_TEACHER_BATCH=${EDGE_TEACHER_BATCH:-128}
-      - EDGE_TEACHER_LR=${EDGE_TEACHER_LR:-0.001}
-      - EDGE_TEACHER_MAX_SAMPLES=${EDGE_TEACHER_MAX_SAMPLES:-0}
-      - EDGE_TEACHER_REFRESH_EVERY=${EDGE_TEACHER_REFRESH_EVERY:-0}
-      - EDGE_DISTILL_SOURCE=${EDGE_DISTILL_SOURCE:-auto}
-      - STUDENT_MODEL_TYPE=${STUDENT_MODEL_TYPE:-tcn}
-      - STUDENT_MLP_UNITS=${STUDENT_MLP_UNITS:-64,32}
-      - STUDENT_MLP_DROPOUT=${STUDENT_MLP_DROPOUT:-0.0}
-      - STUDENT_TCN_FILTERS=${STUDENT_TCN_FILTERS:-8}
-      - STUDENT_TCN_KERNEL=${STUDENT_TCN_KERNEL:-3}
-      - STUDENT_TCN_DILATIONS=${STUDENT_TCN_DILATIONS:-1,2}
-      - STUDENT_TCN_DROPOUT=${STUDENT_TCN_DROPOUT:-0.05}
-      - STUDENT_TCN_DENSE=${STUDENT_TCN_DENSE:-16}
-      - EDGE_TEACHER_MODEL_TYPE=${EDGE_TEACHER_MODEL_TYPE:-gru}
-      - EDGE_GRU_UNITS=${EDGE_GRU_UNITS:-32,32}
-      - EDGE_GRU_DROPOUT=${EDGE_GRU_DROPOUT:-0.1}
-      - EDGE_GRU_DENSE=${EDGE_GRU_DENSE:-32}
-      - CLOUD_TEACHER_MODEL_TYPE=${CLOUD_TEACHER_MODEL_TYPE:-tcn}
-      - CLOUD_TCN_FILTERS=${CLOUD_TCN_FILTERS:-96}
-      - CLOUD_TCN_KERNEL=${CLOUD_TCN_KERNEL:-3}
-      - CLOUD_TCN_DILATIONS=${CLOUD_TCN_DILATIONS:-1,2,4,8,16}
-      - CLOUD_TCN_DROPOUT=${CLOUD_TCN_DROPOUT:-0.2}
-      - CLOUD_TCN_DENSE=${CLOUD_TCN_DENSE:-192}
-    volumes:
-      - ./project:/workspace/project
-      - ./outputs:/workspace/outputs
-      - ./logs:/workspace/logs
-      - ./data:/workspace/data
-    working_dir: /workspace
-    command: ["python", "-m", "project.edge.run"]
-    networks: [hflnet]
-    depends_on:
-      - data_prep
-      - cloud
-
-  edge2:
-    image: hfl_edge:latest
-    container_name: edge2
-    environment:
-      - ROLE=edge
-      - EDGE_ID=edge2
-      - EDGE_TARGET=${EDGE2_TARGET:-humidity}
-      - PYTHONUNBUFFERED=1
-      - EDGE_KEY_HEX=A1B2C3D4E5F67890123456789ABCDEF0A1B2C3D4E5F67890123456789ABCDEF0
-      - SYNC_MODE=${SYNC_MODE:-0}
-      - EDGE_CLIENTS=${EDGE2_CLIENTS:-iot3,iot4}
-      - OPTIMIZER=${OPTIMIZER:-sgd}
-      - CLIP_NORM=${CLIP_NORM:-1.0}
-      - LOSS_FN=${LOSS_FN:-huber}
-      - LOSS_FN_CLASSIF=${LOSS_FN_CLASSIF:-binary_crossentropy}
-      - HUBER_DELTA=${HUBER_DELTA:-1.0}
-      - EDGE_WAIT_FOR_IOTS=${EDGE_WAIT_FOR_IOTS:-1}
-      - EDGE_WAIT_FOR_CLOUD=${EDGE_WAIT_FOR_CLOUD:-1}
-      - EDGE_EXPECTED_IOTS=${EDGE2_EXPECTED_IOTS:-iot3,iot4}
-      - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
-      - OUT_DIR=${OUT_DIR:-/workspace/outputs}
-      - EDGE_WEIGHT_BY_SAMPLES=${EDGE_WEIGHT_BY_SAMPLES:-1}
-      - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
-      - EDGE_FT_EPOCHS=${EDGE_FT_EPOCHS:-2}
-      - EDGE_FT_BATCH=${EDGE_FT_BATCH:-128}
-      - EDGE_FT_EVERY=${EDGE_FT_EVERY:-1}
-      - EDGE_FT_MAX_SAMPLES=${EDGE_FT_MAX_SAMPLES:-0}
-      - EDGE_FT_ALPHA=${EDGE_FT_ALPHA:-0.1}
-      - EDGE_TEACHER_ENABLE=${EDGE_TEACHER_ENABLE:-0}
-      - EDGE_TEACHER_EPOCHS=${EDGE_TEACHER_EPOCHS:-5}
-      - EDGE_TEACHER_BATCH=${EDGE_TEACHER_BATCH:-128}
-      - EDGE_TEACHER_LR=${EDGE_TEACHER_LR:-0.001}
-      - EDGE_TEACHER_MAX_SAMPLES=${EDGE_TEACHER_MAX_SAMPLES:-0}
-      - EDGE_TEACHER_REFRESH_EVERY=${EDGE_TEACHER_REFRESH_EVERY:-0}
-      - EDGE_DISTILL_SOURCE=${EDGE_DISTILL_SOURCE:-auto}
-      - STUDENT_MODEL_TYPE=${STUDENT_MODEL_TYPE:-tcn}
-      - STUDENT_MLP_UNITS=${STUDENT_MLP_UNITS:-64,32}
-      - STUDENT_MLP_DROPOUT=${STUDENT_MLP_DROPOUT:-0.0}
-      - STUDENT_TCN_FILTERS=${STUDENT_TCN_FILTERS:-8}
-      - STUDENT_TCN_KERNEL=${STUDENT_TCN_KERNEL:-3}
-      - STUDENT_TCN_DILATIONS=${STUDENT_TCN_DILATIONS:-1,2}
-      - STUDENT_TCN_DROPOUT=${STUDENT_TCN_DROPOUT:-0.05}
-      - STUDENT_TCN_DENSE=${STUDENT_TCN_DENSE:-16}
-      - EDGE_TEACHER_MODEL_TYPE=${EDGE_TEACHER_MODEL_TYPE:-gru}
-      - EDGE_GRU_UNITS=${EDGE_GRU_UNITS:-32,32}
-      - EDGE_GRU_DROPOUT=${EDGE_GRU_DROPOUT:-0.1}
-      - EDGE_GRU_DENSE=${EDGE_GRU_DENSE:-32}
-      - CLOUD_TEACHER_MODEL_TYPE=${CLOUD_TEACHER_MODEL_TYPE:-tcn}
-      - CLOUD_TCN_FILTERS=${CLOUD_TCN_FILTERS:-96}
-      - CLOUD_TCN_KERNEL=${CLOUD_TCN_KERNEL:-3}
-      - CLOUD_TCN_DILATIONS=${CLOUD_TCN_DILATIONS:-1,2,4,8,16}
-      - CLOUD_TCN_DROPOUT=${CLOUD_TCN_DROPOUT:-0.2}
-      - CLOUD_TCN_DENSE=${CLOUD_TCN_DENSE:-192}
-    volumes:
-      - ./project:/workspace/project
-      - ./outputs:/workspace/outputs
-      - ./logs:/workspace/logs
-      - ./data:/workspace/data
-    working_dir: /workspace
-    command: ["python", "-m", "project.edge.run"]
-    networks: [hflnet]
-    depends_on:
-      - data_prep
-      - cloud
-
-  edge3:
-    image: hfl_edge:latest
-    container_name: edge3
-    environment:
-      - ROLE=edge
-      - EDGE_ID=edge3
-      - EDGE_TARGET=${EDGE3_TARGET:-light}
-      - PYTHONUNBUFFERED=1
-      - EDGE_KEY_HEX=${EDGE3_KEY:-11223344556677889900AABBCCDDEEFF11223344556677889900AABBCCDDEEFF}
-      - SYNC_MODE=${SYNC_MODE:-0}
-      - EDGE_CLIENTS=${EDGE3_CLIENTS:-iot5,iot6}
-      - OPTIMIZER=${OPTIMIZER:-sgd}
-      - CLIP_NORM=${CLIP_NORM:-1.0}
-      - LOSS_FN=${LOSS_FN:-huber}
-      - LOSS_FN_CLASSIF=${LOSS_FN_CLASSIF:-binary_crossentropy}
-      - HUBER_DELTA=${HUBER_DELTA:-1.0}
-      - EDGE_WAIT_FOR_IOTS=${EDGE_WAIT_FOR_IOTS:-1}
-      - EDGE_WAIT_FOR_CLOUD=${EDGE_WAIT_FOR_CLOUD:-1}
-      - EDGE_EXPECTED_IOTS=${EDGE3_EXPECTED_IOTS:-iot5,iot6}
-      - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
-      - OUT_DIR=${OUT_DIR:-/workspace/outputs}
-      - EDGE_WEIGHT_BY_SAMPLES=${EDGE_WEIGHT_BY_SAMPLES:-1}
-      - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
-      - EDGE_FT_EPOCHS=${EDGE_FT_EPOCHS:-2}
-      - EDGE_FT_BATCH=${EDGE_FT_BATCH:-128}
-      - EDGE_FT_EVERY=${EDGE_FT_EVERY:-1}
-      - EDGE_FT_MAX_SAMPLES=${EDGE_FT_MAX_SAMPLES:-0}
-      - EDGE_FT_ALPHA=${EDGE_FT_ALPHA:-0.1}
-      - EDGE_TEACHER_ENABLE=${EDGE_TEACHER_ENABLE:-0}
-      - EDGE_TEACHER_EPOCHS=${EDGE_TEACHER_EPOCHS:-5}
-      - EDGE_TEACHER_BATCH=${EDGE_TEACHER_BATCH:-128}
-      - EDGE_TEACHER_LR=${EDGE_TEACHER_LR:-0.001}
-      - EDGE_TEACHER_MAX_SAMPLES=${EDGE_TEACHER_MAX_SAMPLES:-0}
-      - EDGE_TEACHER_REFRESH_EVERY=${EDGE_TEACHER_REFRESH_EVERY:-0}
-      - EDGE_DISTILL_SOURCE=${EDGE_DISTILL_SOURCE:-auto}
-      - STUDENT_MODEL_TYPE=${STUDENT_MODEL_TYPE:-tcn}
-      - STUDENT_MLP_UNITS=${STUDENT_MLP_UNITS:-64,32}
-      - STUDENT_MLP_DROPOUT=${STUDENT_MLP_DROPOUT:-0.0}
-      - STUDENT_TCN_FILTERS=${STUDENT_TCN_FILTERS:-8}
-      - STUDENT_TCN_KERNEL=${STUDENT_TCN_KERNEL:-3}
-      - STUDENT_TCN_DILATIONS=${STUDENT_TCN_DILATIONS:-1,2}
-      - STUDENT_TCN_DROPOUT=${STUDENT_TCN_DROPOUT:-0.05}
-      - STUDENT_TCN_DENSE=${STUDENT_TCN_DENSE:-16}
-      - EDGE_TEACHER_MODEL_TYPE=${EDGE_TEACHER_MODEL_TYPE:-gru}
-      - EDGE_GRU_UNITS=${EDGE_GRU_UNITS:-32,32}
-      - EDGE_GRU_DROPOUT=${EDGE_GRU_DROPOUT:-0.1}
-      - EDGE_GRU_DENSE=${EDGE_GRU_DENSE:-32}
-      - CLOUD_TEACHER_MODEL_TYPE=${CLOUD_TEACHER_MODEL_TYPE:-tcn}
-      - CLOUD_TCN_FILTERS=${CLOUD_TCN_FILTERS:-96}
-      - CLOUD_TCN_KERNEL=${CLOUD_TCN_KERNEL:-3}
-      - CLOUD_TCN_DILATIONS=${CLOUD_TCN_DILATIONS:-1,2,4,8,16}
-      - CLOUD_TCN_DROPOUT=${CLOUD_TCN_DROPOUT:-0.2}
-      - CLOUD_TCN_DENSE=${CLOUD_TCN_DENSE:-192}
-    volumes:
-      - ./project:/workspace/project
-      - ./outputs:/workspace/outputs
-      - ./logs:/workspace/logs
-      - ./data:/workspace/data
-    working_dir: /workspace
-    command: ["python", "-m", "project.edge.run"]
-    networks: [hflnet]
-    depends_on:
-      - data_prep
-      - cloud
-
   iot1:
     build:
       context: .
@@ -292,7 +95,7 @@ services:
     environment:
       - ROLE=iot
       - IOT_ID=iot1
-      - EDGE_URI=ws://edge1:8765   # 🔗 conecta no edge1
+      - EDGE_URI=ws://cloud:9000   # 🔗 conecta no cloud
       - OPTIMIZER=${OPTIMIZER:-sgd}
       - CLIP_NORM=${CLIP_NORM:-1.0}
       - LOSS_FN=${LOSS_FN:-huber}
@@ -305,6 +108,8 @@ services:
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
       - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
+      - WS_PING_INTERVAL=${WS_PING_INTERVAL:-0}
+      - WS_PING_TIMEOUT=${WS_PING_TIMEOUT:-0}
       - STUDENT_MODEL_TYPE=${STUDENT_MODEL_TYPE:-tcn}
       - STUDENT_MLP_UNITS=${STUDENT_MLP_UNITS:-64,32}
       - STUDENT_MLP_DROPOUT=${STUDENT_MLP_DROPOUT:-0.0}
@@ -329,15 +134,14 @@ services:
     networks: [hflnet]
     depends_on:
       - data_prep
-      - edge1
-
+      - cloud
   iot2:
     image: hfl_iot:latest
     container_name: iot2
     environment:
       - ROLE=iot
       - IOT_ID=iot2
-      - EDGE_URI=ws://edge1:8765   # 🔗 conecta no edge1
+      - EDGE_URI=ws://cloud:9000   # 🔗 conecta no cloud
       - OPTIMIZER=${OPTIMIZER:-sgd}
       - CLIP_NORM=${CLIP_NORM:-1.0}
       - LOSS_FN=${LOSS_FN:-huber}
@@ -350,6 +154,8 @@ services:
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
       - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
+      - WS_PING_INTERVAL=${WS_PING_INTERVAL:-0}
+      - WS_PING_TIMEOUT=${WS_PING_TIMEOUT:-0}
       - STUDENT_MODEL_TYPE=${STUDENT_MODEL_TYPE:-tcn}
       - STUDENT_MLP_UNITS=${STUDENT_MLP_UNITS:-64,32}
       - STUDENT_MLP_DROPOUT=${STUDENT_MLP_DROPOUT:-0.0}
@@ -374,15 +180,14 @@ services:
     networks: [hflnet]
     depends_on:
       - data_prep
-      - edge1
-
+      - cloud
   iot3:
     image: hfl_iot:latest
     container_name: iot3
     environment:
       - ROLE=iot
       - IOT_ID=iot3
-      - EDGE_URI=ws://edge2:8765   # 🔗 conecta no edge2
+      - EDGE_URI=ws://cloud:9000   # 🔗 conecta no cloud
       - OPTIMIZER=${OPTIMIZER:-sgd}
       - CLIP_NORM=${CLIP_NORM:-1.0}
       - LOSS_FN=${LOSS_FN:-huber}
@@ -395,6 +200,8 @@ services:
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
       - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
+      - WS_PING_INTERVAL=${WS_PING_INTERVAL:-0}
+      - WS_PING_TIMEOUT=${WS_PING_TIMEOUT:-0}
       - STUDENT_MODEL_TYPE=${STUDENT_MODEL_TYPE:-tcn}
       - STUDENT_MLP_UNITS=${STUDENT_MLP_UNITS:-64,32}
       - STUDENT_MLP_DROPOUT=${STUDENT_MLP_DROPOUT:-0.0}
@@ -419,15 +226,14 @@ services:
     networks: [hflnet]
     depends_on:
       - data_prep
-      - edge2
-
+      - cloud
   iot4:
     image: hfl_iot:latest
     container_name: iot4
     environment:
       - ROLE=iot
       - IOT_ID=iot4
-      - EDGE_URI=ws://edge2:8765   # 🔗 conecta no edge2
+      - EDGE_URI=ws://cloud:9000   # 🔗 conecta no cloud
       - OPTIMIZER=${OPTIMIZER:-sgd}
       - CLIP_NORM=${CLIP_NORM:-1.0}
       - LOSS_FN=${LOSS_FN:-huber}
@@ -440,6 +246,8 @@ services:
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
       - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
+      - WS_PING_INTERVAL=${WS_PING_INTERVAL:-0}
+      - WS_PING_TIMEOUT=${WS_PING_TIMEOUT:-0}
       - STUDENT_MODEL_TYPE=${STUDENT_MODEL_TYPE:-tcn}
       - STUDENT_MLP_UNITS=${STUDENT_MLP_UNITS:-64,32}
       - STUDENT_MLP_DROPOUT=${STUDENT_MLP_DROPOUT:-0.0}
@@ -464,15 +272,14 @@ services:
     networks: [hflnet]
     depends_on:
       - data_prep
-      - edge2
-
+      - cloud
   iot5:
     image: hfl_iot:latest
     container_name: iot5
     environment:
       - ROLE=iot
       - IOT_ID=iot5
-      - EDGE_URI=ws://edge3:8765   # 🔗 conecta no edge3
+      - EDGE_URI=ws://cloud:9000   # 🔗 conecta no cloud
       - OPTIMIZER=${OPTIMIZER:-sgd}
       - CLIP_NORM=${CLIP_NORM:-1.0}
       - LOSS_FN=${LOSS_FN:-huber}
@@ -485,6 +292,8 @@ services:
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
       - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
+      - WS_PING_INTERVAL=${WS_PING_INTERVAL:-0}
+      - WS_PING_TIMEOUT=${WS_PING_TIMEOUT:-0}
       - STUDENT_MODEL_TYPE=${STUDENT_MODEL_TYPE:-tcn}
       - STUDENT_MLP_UNITS=${STUDENT_MLP_UNITS:-64,32}
       - STUDENT_MLP_DROPOUT=${STUDENT_MLP_DROPOUT:-0.0}
@@ -509,15 +318,14 @@ services:
     networks: [hflnet]
     depends_on:
       - data_prep
-      - edge3
-
+      - cloud
   iot6:
     image: hfl_iot:latest
     container_name: iot6
     environment:
       - ROLE=iot
       - IOT_ID=iot6
-      - EDGE_URI=ws://edge3:8765   # 🔗 conecta no edge3
+      - EDGE_URI=ws://cloud:9000   # 🔗 conecta no cloud
       - OPTIMIZER=${OPTIMIZER:-sgd}
       - CLIP_NORM=${CLIP_NORM:-1.0}
       - LOSS_FN=${LOSS_FN:-huber}
@@ -530,6 +338,8 @@ services:
       - LOGS_DIR=${LOGS_DIR:-/workspace/logs}
       - OUT_DIR=${OUT_DIR:-/workspace/outputs}
       - WS_MAX_SIZE=${WS_MAX_SIZE:-16mb}
+      - WS_PING_INTERVAL=${WS_PING_INTERVAL:-0}
+      - WS_PING_TIMEOUT=${WS_PING_TIMEOUT:-0}
       - STUDENT_MODEL_TYPE=${STUDENT_MODEL_TYPE:-tcn}
       - STUDENT_MLP_UNITS=${STUDENT_MLP_UNITS:-64,32}
       - STUDENT_MLP_DROPOUT=${STUDENT_MLP_DROPOUT:-0.0}
@@ -554,8 +364,7 @@ services:
     networks: [hflnet]
     depends_on:
       - data_prep
-      - edge3
-
+      - cloud
   analyzer:
     image: hfl_analyzer:latest
     container_name: analyzer

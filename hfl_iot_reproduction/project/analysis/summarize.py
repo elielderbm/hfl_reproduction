@@ -17,6 +17,7 @@ def _pick_cols(df: pd.DataFrame):
     error_col = None
     r2_col = None
     mape_col = None
+    acc_col = None
 
     if "train_score" in df.columns:
         score_col = "train_score"
@@ -46,7 +47,12 @@ def _pick_cols(df: pd.DataFrame):
     elif "val_mape" in df.columns:
         mape_col = "val_mape"
 
-    return score_col, error_col, r2_col, mape_col
+    if "val_acc" in df.columns:
+        acc_col = "val_acc"
+    elif "train_acc" in df.columns:
+        acc_col = "train_acc"
+
+    return score_col, error_col, r2_col, mape_col, acc_col
 
 
 def main():
@@ -59,7 +65,7 @@ def main():
     # IoT summary
     iot = df[(df["type"] == "metric") & (df["file"].str.startswith("iot"))].copy()
     if not iot.empty:
-        score_col, error_col, r2_col, mape_col = _pick_cols(iot)
+        score_col, error_col, r2_col, mape_col, acc_col = _pick_cols(iot)
         rows = []
         for iot_id, sub in iot.groupby("iot"):
             sub = sub.sort_values("round")
@@ -69,6 +75,7 @@ def main():
             error = sub[error_col].dropna() if error_col in sub.columns else pd.Series(dtype=float)
             r2 = sub[r2_col].dropna() if r2_col and r2_col in sub.columns else pd.Series(dtype=float)
             mape = sub[mape_col].dropna() if mape_col and mape_col in sub.columns else pd.Series(dtype=float)
+            acc = sub[acc_col].dropna() if acc_col and acc_col in sub.columns else pd.Series(dtype=float)
             distill = sub["distill_rmse"].dropna() if "distill_rmse" in sub.columns else pd.Series(dtype=float)
 
             rows.append(
@@ -86,6 +93,8 @@ def main():
                     "r2_best": float(r2.max()) if len(r2) else None,
                     "mape_last": float(mape.iloc[-1]) if len(mape) else None,
                     "mape_best": float(mape.min()) if len(mape) else None,
+                    "acc_last": float(acc.iloc[-1]) if len(acc) else None,
+                    "acc_best": float(acc.max()) if len(acc) else None,
                     "distill_rmse_last": float(distill.iloc[-1]) if len(distill) else None,
                     "distill_rmse_best": float(distill.min()) if len(distill) else None,
                 }
@@ -104,40 +113,38 @@ def main():
         print(g.to_string())
         _write_csv_replace(g, OUT / "iot_summary.csv")
 
-    # Edge summary
-    edge = df[(df["type"] == "metric") & (df["file"].str.startswith("edge"))].copy()
-    if not edge.empty:
+    # Cloud aggregation summary (centralized async)
+    cloud = df[(df["type"] == "metric") & (df["file"].str.startswith("cloud"))].copy()
+    if not cloud.empty:
         rows = []
-        for edge_id, sub in edge.groupby("edge"):
+        groups = cloud.groupby("target") if "target" in cloud.columns else [("global", cloud)]
+        for target, sub in groups:
             sub = sub.sort_values("_ts")
-            row = {"edge": edge_id}
-            if "target" in sub.columns and sub["target"].notna().any():
-                row["target"] = sub["target"].dropna().iloc[-1]
+            row = {"target": target}
             if "window" in sub.columns and sub["window"].notna().any():
                 row["window_start"] = float(sub["window"].dropna().iloc[0])
                 row["window_last"] = float(sub["window"].dropna().iloc[-1])
                 row["window_mean"] = float(sub["window"].mean())
+                row["window_min"] = float(sub["window"].min())
+                row["window_max"] = float(sub["window"].max())
             if "pactual" in sub.columns and sub["pactual"].notna().any():
                 row["pactual_mean"] = float(sub["pactual"].mean())
                 row["pactual_half_ratio"] = float((sub["pactual"] == 0.5).mean())
                 row["pactual_full_ratio"] = float((sub["pactual"] == 1.0).mean())
-            if "qcurrent" in sub.columns and sub["qcurrent"].notna().any():
-                row["qcurrent_mean"] = float(sub["qcurrent"].mean())
+            if "edges" in sub.columns and sub["edges"].notna().any():
+                row["contributors_mean"] = float(sub["edges"].mean())
+                row["contributors_min"] = float(sub["edges"].min())
+                row["contributors_max"] = float(sub["edges"].max())
             if "buf" in sub.columns and sub["buf"].notna().any():
                 row["buf_mean"] = float(sub["buf"].mean())
-            if "edge_ft_rmse" in sub.columns and sub["edge_ft_rmse"].notna().any():
-                row["edge_ft_rmse_last"] = float(sub["edge_ft_rmse"].dropna().iloc[-1])
-            if "edge_ft_score" in sub.columns and sub["edge_ft_score"].notna().any():
-                row["edge_ft_score_last"] = float(sub["edge_ft_score"].dropna().iloc[-1])
             rows.append(row)
 
-        g = pd.DataFrame(rows).set_index("edge").sort_index()
-        print("\n== Edge Summary ==")
+        g = pd.DataFrame(rows).set_index("target").sort_index()
+        print("\n== Cloud Aggregation Summary ==")
         print(g.to_string())
-        _write_csv_replace(g, OUT / "edge_summary.csv")
+        _write_csv_replace(g, OUT / "cloud_agg_summary.csv")
 
     # Cloud summary
-    cloud = df[(df["type"] == "metric") & (df["file"].str.startswith("cloud"))].copy()
     if not cloud.empty:
         rows = []
         groups = cloud.groupby("target") if "target" in cloud.columns else [("global", cloud)]
@@ -154,6 +161,8 @@ def main():
                 "global_score_last": float(sub["global_score"].dropna().iloc[-1]) if "global_score" in sub.columns and sub["global_score"].notna().any() else None,
                 "global_score_best": float(sub["global_score"].max()) if "global_score" in sub.columns else None,
                 "global_rmse_last": float(sub["global_rmse"].dropna().iloc[-1]) if "global_rmse" in sub.columns and sub["global_rmse"].notna().any() else None,
+                "global_acc_last": float(sub["global_acc"].dropna().iloc[-1]) if "global_acc" in sub.columns and sub["global_acc"].notna().any() else None,
+                "global_acc_best": float(sub["global_acc"].max()) if "global_acc" in sub.columns else None,
                 "global_r2_last": float(sub["global_r2"].dropna().iloc[-1]) if "global_r2" in sub.columns and sub["global_r2"].notna().any() else None,
                 "global_mape_last": float(sub["global_mape"].dropna().iloc[-1]) if "global_mape" in sub.columns and sub["global_mape"].notna().any() else None,
                 "server_ft_rmse_last": float(sub["server_ft_rmse"].dropna().iloc[-1]) if "server_ft_rmse" in sub.columns and sub["server_ft_rmse"].notna().any() else None,

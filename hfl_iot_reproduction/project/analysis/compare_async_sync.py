@@ -44,6 +44,7 @@ def _pick_cols(iot: pd.DataFrame):
     error_col = None
     r2_col = None
     mape_col = None
+    acc_col = None
 
     if "train_score" in iot.columns:
         score_col = "train_score"
@@ -65,30 +66,38 @@ def _pick_cols(iot: pd.DataFrame):
     elif "val_mape" in iot.columns:
         mape_col = "val_mape"
 
-    return score_col, error_col, r2_col, mape_col
+    if "val_acc" in iot.columns:
+        acc_col = "val_acc"
+    elif "train_acc" in iot.columns:
+        acc_col = "train_acc"
+
+    return score_col, error_col, r2_col, mape_col, acc_col
 
 
 def _summary(df: pd.DataFrame) -> dict:
     metrics = df[df["type"] == "metric"].copy() if "type" in df.columns else df.copy()
     iot = metrics[metrics["file"].str.startswith("iot")].copy() if "file" in metrics.columns else pd.DataFrame()
-    edge = metrics[metrics["file"].str.startswith("edge")].copy() if "file" in metrics.columns else pd.DataFrame()
     cloud = metrics[metrics["file"].str.startswith("cloud")].copy() if "file" in metrics.columns else pd.DataFrame()
 
-    score_col, error_col, r2_col, mape_col = _pick_cols(iot)
+    score_col, error_col, r2_col, mape_col, acc_col = _pick_cols(iot)
 
     local_score_last = None
     local_rmse_last = None
     local_r2_last = None
     local_mape_last = None
-    if not iot.empty and "round" in iot.columns and score_col:
+    local_acc_last = None
+    if not iot.empty and "round" in iot.columns:
         g = iot.sort_values("round").groupby("iot")
-        local_score_last = _mean(g[score_col].last())
+        if score_col:
+            local_score_last = _mean(g[score_col].last())
         if error_col:
             local_rmse_last = _mean(g[error_col].last())
         if r2_col:
             local_r2_last = _mean(g[r2_col].last())
         if mape_col:
             local_mape_last = _mean(g[mape_col].last())
+        if acc_col:
+            local_acc_last = _mean(g[acc_col].last())
 
     round_time_s = pd.Series(dtype=float)
     if not cloud.empty and "_ts" in cloud.columns:
@@ -97,16 +106,12 @@ def _summary(df: pd.DataFrame) -> dict:
         round_time_s = round_time_s[round_time_s > 0]
 
     throughput = pd.Series(dtype=float)
-    if not edge.empty and "_ts" in edge.columns and "payload_bytes" in edge.columns:
-        rows = []
-        for _, sub in edge.sort_values("_ts").groupby("edge"):
-            sub = sub.copy()
-            sub["delta_s"] = sub["_ts"].diff() / 1000.0
-            sub = sub[sub["delta_s"] > 0]
-            sub["throughput_kbps"] = (sub["payload_bytes"] / 1024.0) / sub["delta_s"]
-            rows.append(sub["throughput_kbps"].dropna())
-        if rows:
-            throughput = pd.concat(rows, ignore_index=True)
+    if not cloud.empty and "_ts" in cloud.columns and "payload_bytes" in cloud.columns:
+        sub = cloud.sort_values("_ts").copy()
+        sub["delta_s"] = sub["_ts"].diff() / 1000.0
+        sub = sub[sub["delta_s"] > 0]
+        sub["throughput_kbps"] = (sub["payload_bytes"] / 1024.0) / sub["delta_s"]
+        throughput = sub["throughput_kbps"].dropna()
 
     if not cloud.empty and "target" in cloud.columns:
         g_target = cloud.sort_values("round").groupby("target")
@@ -114,21 +119,25 @@ def _summary(df: pd.DataFrame) -> dict:
         global_rmse_last = _mean(g_target["global_rmse"].last()) if "global_rmse" in cloud.columns else None
         global_r2_last = _mean(g_target["global_r2"].last()) if "global_r2" in cloud.columns else None
         global_mape_last = _mean(g_target["global_mape"].last()) if "global_mape" in cloud.columns else None
+        global_acc_last = _mean(g_target["global_acc"].last()) if "global_acc" in cloud.columns else None
     else:
         global_score_last = _last(cloud["global_score"]) if "global_score" in cloud.columns else None
         global_rmse_last = _last(cloud["global_rmse"]) if "global_rmse" in cloud.columns else None
         global_r2_last = _last(cloud["global_r2"]) if "global_r2" in cloud.columns else None
         global_mape_last = _last(cloud["global_mape"]) if "global_mape" in cloud.columns else None
+        global_acc_last = _last(cloud["global_acc"]) if "global_acc" in cloud.columns else None
 
     return {
         "local_score_last": local_score_last,
         "local_rmse_last": local_rmse_last,
         "local_r2_last": local_r2_last,
         "local_mape_last": local_mape_last,
+        "local_acc_last": local_acc_last,
         "global_score_last": global_score_last,
         "global_rmse_last": global_rmse_last,
         "global_r2_last": global_r2_last,
         "global_mape_last": global_mape_last,
+        "global_acc_last": global_acc_last,
         "round_time_s_mean": _mean(round_time_s),
         "throughput_kbps_mean": _mean(throughput),
         "enc_ms_mean": _mean(iot["enc_ms"]) if "enc_ms" in iot.columns else None,
@@ -174,10 +183,10 @@ def main():
     out_path = Path(args.out) if args.out else async_dir / "compare_async_sync.md"
 
     lines = []
-    lines.append("# Async vs Sync Comparison (Deep)")
+    lines.append("# Run Comparison (Deep)")
     lines.append("")
     lines.append("## Core Metrics")
-    lines.append("| Metric | Async | Sync | Delta |")
+    lines.append("| Metric | Run A | Run B | Delta |")
     lines.append("| --- | --- | --- | --- |")
 
     def _delta(a, b, fmt="{:+.4f}"):
@@ -193,10 +202,12 @@ def main():
         ("local_rmse_last", "Local RMSE (last, mean)"),
         ("local_r2_last", "Local R2 (last, mean)"),
         ("local_mape_last", "Local MAPE (last, mean)"),
+        ("local_acc_last", "Local Acc (last, mean)"),
         ("global_score_last", "Global Score (last)"),
         ("global_rmse_last", "Global RMSE (last)"),
         ("global_r2_last", "Global R2 (last)"),
         ("global_mape_last", "Global MAPE (last)"),
+        ("global_acc_last", "Global Acc (last)"),
         ("round_time_s_mean", "Round Time (mean, s)"),
         ("throughput_kbps_mean", "Throughput (KB/s, mean)"),
         ("enc_ms_mean", "Encrypt Overhead (ms, mean)"),
@@ -211,7 +222,7 @@ def main():
     if t_async is not None and t_sync is not None:
         lines.append("")
         lines.append("## Per-Target Comparison (Global Model)")
-        lines.append("| Target | Async Score (last) | Sync Score (last) | Delta | Async RMSE (last) | Sync RMSE (last) | Delta |")
+        lines.append("| Target | Run A Score (last) | Run B Score (last) | Delta | Run A RMSE (last) | Run B RMSE (last) | Delta |")
         lines.append("| --- | --- | --- | --- | --- | --- | --- |")
         for target in sorted(set(t_async.index) | set(t_sync.index)):
             a = t_async.loc[target] if target in t_async.index else None

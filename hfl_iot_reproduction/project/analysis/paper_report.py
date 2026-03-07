@@ -15,7 +15,7 @@ from project.analysis.paths import OUT
 @dataclass
 class Summary:
     iot_count: int
-    edge_count: int
+    contributors_mean: float | None
     rounds_iot: int | None
     rounds_cloud: int | None
     duration_s: float | None
@@ -24,16 +24,19 @@ class Summary:
     local_error_last_mean: float | None
     local_r2_last_mean: float | None
     local_mape_last_mean: float | None
+    local_acc_last_mean: float | None
+    local_acc_best_mean: float | None
     global_score_last: float | None
     global_score_best: float | None
     global_rmse_last: float | None
     global_r2_last: float | None
     global_mape_last: float | None
+    global_acc_last: float | None
+    global_acc_best: float | None
     round_time_s_mean: float | None
     round_time_s_p90: float | None
     throughput_kbps_mean: float | None
     enc_ms_mean: float | None
-    edge_dec_ms_mean: float | None
     cloud_dec_ms_mean: float | None
     pactual_mean: float | None
     pdesired: float | None
@@ -157,26 +160,32 @@ def _pick_cols(iot: pd.DataFrame):
 def compute_summary(df: pd.DataFrame, pdesired: float | None = None) -> Summary:
     metrics = df[df["type"] == "metric"].copy()
     iot = metrics[metrics["file"].str.startswith("iot")].copy()
-    edge = metrics[metrics["file"].str.startswith("edge")].copy()
     cloud = metrics[metrics["file"].str.startswith("cloud")].copy()
 
     score_col, error_col, r2_col, mape_col = _pick_cols(iot)
+    acc_col = "val_acc" if "val_acc" in iot.columns else ("train_acc" if "train_acc" in iot.columns else None)
 
     local_last = None
     local_best = None
     local_error_last = None
     local_r2_last = None
     local_mape_last = None
-    if not iot.empty and "round" in iot.columns and score_col:
+    local_acc_last = None
+    local_acc_best = None
+    if not iot.empty and "round" in iot.columns:
         g = iot.sort_values("round").groupby("iot")
-        local_last = _mean(g[score_col].last())
-        local_best = _mean(g[score_col].max())
+        if score_col:
+            local_last = _mean(g[score_col].last())
+            local_best = _mean(g[score_col].max())
         if error_col:
             local_error_last = _mean(g[error_col].last())
         if r2_col:
             local_r2_last = _mean(g[r2_col].last())
         if mape_col:
             local_mape_last = _mean(g[mape_col].last())
+        if acc_col:
+            local_acc_last = _mean(g[acc_col].last())
+            local_acc_best = _mean(g[acc_col].max())
 
     if not cloud.empty and "target" in cloud.columns:
         g_target = cloud.sort_values("round").groupby("target")
@@ -185,16 +194,21 @@ def compute_summary(df: pd.DataFrame, pdesired: float | None = None) -> Summary:
         global_rmse_last = _mean(g_target["global_rmse"].last()) if "global_rmse" in cloud.columns else None
         global_r2_last = _mean(g_target["global_r2"].last()) if "global_r2" in cloud.columns else None
         global_mape_last = _mean(g_target["global_mape"].last()) if "global_mape" in cloud.columns else None
+        global_acc_last = _mean(g_target["global_acc"].last()) if "global_acc" in cloud.columns else None
+        global_acc_best = _mean(g_target["global_acc"].max()) if "global_acc" in cloud.columns else None
     else:
         global_score = cloud["global_score"] if "global_score" in cloud.columns else pd.Series(dtype=float)
         global_rmse = cloud["global_rmse"] if "global_rmse" in cloud.columns else pd.Series(dtype=float)
         global_r2 = cloud["global_r2"] if "global_r2" in cloud.columns else pd.Series(dtype=float)
         global_mape = cloud["global_mape"] if "global_mape" in cloud.columns else pd.Series(dtype=float)
+        global_acc = cloud["global_acc"] if "global_acc" in cloud.columns else pd.Series(dtype=float)
         global_score_last = _last(global_score)
         global_score_best = _best_high(global_score)
         global_rmse_last = _last(global_rmse)
         global_r2_last = _last(global_r2)
         global_mape_last = _last(global_mape)
+        global_acc_last = _last(global_acc)
+        global_acc_best = _best_high(global_acc)
 
     round_time_s = pd.Series(dtype=float)
     if not cloud.empty and "_ts" in cloud.columns:
@@ -203,16 +217,12 @@ def compute_summary(df: pd.DataFrame, pdesired: float | None = None) -> Summary:
         round_time_s = round_time_s[round_time_s > 0]
 
     throughput = pd.Series(dtype=float)
-    if not edge.empty and "_ts" in edge.columns and "payload_bytes" in edge.columns:
-        rows = []
-        for _, sub in edge.sort_values("_ts").groupby("edge"):
-            sub = sub.copy()
-            sub["delta_s"] = sub["_ts"].diff() / 1000.0
-            sub = sub[sub["delta_s"] > 0]
-            sub["throughput_kbps"] = (sub["payload_bytes"] / 1024.0) / sub["delta_s"]
-            rows.append(sub["throughput_kbps"].dropna())
-        if rows:
-            throughput = pd.concat(rows, ignore_index=True)
+    if not cloud.empty and "_ts" in cloud.columns and "payload_bytes" in cloud.columns:
+        c = cloud.sort_values("_ts").copy()
+        c["delta_s"] = c["_ts"].diff() / 1000.0
+        c = c[c["delta_s"] > 0]
+        c["throughput_kbps"] = (c["payload_bytes"] / 1024.0) / c["delta_s"]
+        throughput = c["throughput_kbps"].dropna()
 
     duration_s = None
     if not metrics.empty and "_ts" in metrics.columns:
@@ -220,13 +230,14 @@ def compute_summary(df: pd.DataFrame, pdesired: float | None = None) -> Summary:
         if len(ts) >= 2:
             duration_s = float((ts.max() - ts.min()) / 1000.0)
 
-    window_start = _last(edge.sort_values("_ts").groupby("edge")["window"].first()) if "window" in edge.columns else None
-    window_last = _last(edge.sort_values("_ts").groupby("edge")["window"].last()) if "window" in edge.columns else None
-    window_mean = _mean(edge["window"]) if "window" in edge.columns else None
+    window_start = _last(cloud.sort_values("_ts")["window"].dropna()) if "window" in cloud.columns else None
+    window_last = _last(cloud.sort_values("_ts")["window"].dropna()) if "window" in cloud.columns else None
+    window_mean = _mean(cloud["window"]) if "window" in cloud.columns else None
+    contributors_mean = _mean(cloud["edges"]) if "edges" in cloud.columns else None
 
     return Summary(
         iot_count=iot["iot"].nunique() if "iot" in iot.columns else 0,
-        edge_count=edge["edge"].nunique() if "edge" in edge.columns else 0,
+        contributors_mean=contributors_mean,
         rounds_iot=int(iot["round"].max()) if "round" in iot.columns and not iot.empty else None,
         rounds_cloud=int(cloud["round"].max()) if "round" in cloud.columns and not cloud.empty else None,
         duration_s=duration_s,
@@ -235,18 +246,21 @@ def compute_summary(df: pd.DataFrame, pdesired: float | None = None) -> Summary:
         local_error_last_mean=local_error_last,
         local_r2_last_mean=local_r2_last,
         local_mape_last_mean=local_mape_last,
+        local_acc_last_mean=local_acc_last,
+        local_acc_best_mean=local_acc_best,
         global_score_last=global_score_last,
         global_score_best=global_score_best,
         global_rmse_last=global_rmse_last,
         global_r2_last=global_r2_last,
         global_mape_last=global_mape_last,
+        global_acc_last=global_acc_last,
+        global_acc_best=global_acc_best,
         round_time_s_mean=_mean(round_time_s),
         round_time_s_p90=_p90(round_time_s),
         throughput_kbps_mean=_mean(throughput),
         enc_ms_mean=_mean(iot["enc_ms"]) if "enc_ms" in iot.columns else None,
-        edge_dec_ms_mean=_mean(edge["dec_ms_mean"]) if "dec_ms_mean" in edge.columns else None,
         cloud_dec_ms_mean=_mean(cloud["dec_ms"]) if "dec_ms" in cloud.columns else None,
-        pactual_mean=_mean(edge["pactual"]) if "pactual" in edge.columns else None,
+        pactual_mean=_mean(cloud["pactual"]) if "pactual" in cloud.columns else None,
         pdesired=pdesired,
         window_start=window_start,
         window_last=window_last,
@@ -258,7 +272,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--metrics-dir", default=str(OUT))
     ap.add_argument("--pdesired", type=float, default=None)
-    ap.add_argument("--compare-dir", default=None, help="metrics dir for sync run (HierFAVG)")
+    ap.add_argument("--compare-dir", default=None, help="metrics dir for comparison run (Run B)")
     args = ap.parse_args()
 
     base = Path(args.metrics_dir)
@@ -268,7 +282,6 @@ def main():
 
     metrics = df[df["type"] == "metric"].copy()
     iot = metrics[metrics["file"].str.startswith("iot")].copy()
-    edge = metrics[metrics["file"].str.startswith("edge")].copy()
     cloud = metrics[metrics["file"].str.startswith("cloud")].copy()
 
     if not cloud.empty and "target" in cloud.columns and "global_score" in cloud.columns and "round" in cloud.columns:
@@ -307,7 +320,7 @@ def main():
     report.append("# Paper-Aligned Report (Dynamic Analysis)")
     report.append("")
     report.append("## Snapshot")
-    report.append(f"- IoTs: {summary.iot_count}; Edges: {summary.edge_count}")
+    report.append(f"- IoTs: {summary.iot_count}; Aggregator: Cloud (centralized)")
     report.append(f"- IoT rounds: {summary.rounds_iot}; Cloud rounds: {summary.rounds_cloud}")
     report.append(f"- Duration: {summary.duration_s:.2f}s" if summary.duration_s else "- Duration: n/a")
     report.append("")
@@ -320,16 +333,19 @@ def main():
     report.append(f"| Local Error (last, mean) | {summary.local_error_last_mean:.4f} |" if summary.local_error_last_mean is not None else "| Local Error (last, mean) | n/a |")
     report.append(f"| Local R2 (last, mean) | {summary.local_r2_last_mean:.4f} |" if summary.local_r2_last_mean is not None else "| Local R2 (last, mean) | n/a |")
     report.append(f"| Local MAPE (last, mean) | {summary.local_mape_last_mean:.4f} |" if summary.local_mape_last_mean is not None else "| Local MAPE (last, mean) | n/a |")
+    report.append(f"| Local Acc (last, mean) | {summary.local_acc_last_mean:.4f} |" if summary.local_acc_last_mean is not None else "| Local Acc (last, mean) | n/a |")
+    report.append(f"| Local Acc (best, mean) | {summary.local_acc_best_mean:.4f} |" if summary.local_acc_best_mean is not None else "| Local Acc (best, mean) | n/a |")
     report.append(f"| Global Score (last) | {summary.global_score_last:.4f} |" if summary.global_score_last is not None else "| Global Score (last) | n/a |")
     report.append(f"| Global Score (best) | {summary.global_score_best:.4f} |" if summary.global_score_best is not None else "| Global Score (best) | n/a |")
     report.append(f"| Global RMSE (last) | {summary.global_rmse_last:.4f} |" if summary.global_rmse_last is not None else "| Global RMSE (last) | n/a |")
     report.append(f"| Global R2 (last) | {summary.global_r2_last:.4f} |" if summary.global_r2_last is not None else "| Global R2 (last) | n/a |")
     report.append(f"| Global MAPE (last) | {summary.global_mape_last:.4f} |" if summary.global_mape_last is not None else "| Global MAPE (last) | n/a |")
+    report.append(f"| Global Acc (last) | {summary.global_acc_last:.4f} |" if summary.global_acc_last is not None else "| Global Acc (last) | n/a |")
+    report.append(f"| Global Acc (best) | {summary.global_acc_best:.4f} |" if summary.global_acc_best is not None else "| Global Acc (best) | n/a |")
     report.append(f"| Round Time (mean, s) | {summary.round_time_s_mean:.3f} |" if summary.round_time_s_mean is not None else "| Round Time (mean, s) | n/a |")
     report.append(f"| Round Time (p90, s) | {summary.round_time_s_p90:.3f} |" if summary.round_time_s_p90 is not None else "| Round Time (p90, s) | n/a |")
     report.append(f"| Throughput (KB/s, mean) | {summary.throughput_kbps_mean:.2f} |" if summary.throughput_kbps_mean is not None else "| Throughput (KB/s, mean) | n/a |")
     report.append(f"| Encrypt Overhead (ms, mean) | {summary.enc_ms_mean:.2f} |" if summary.enc_ms_mean is not None else "| Encrypt Overhead (ms, mean) | n/a |")
-    report.append(f"| Edge Decrypt (ms, mean) | {summary.edge_dec_ms_mean:.2f} |" if summary.edge_dec_ms_mean is not None else "| Edge Decrypt (ms, mean) | n/a |")
     report.append(f"| Cloud Decrypt (ms, mean) | {summary.cloud_dec_ms_mean:.2f} |" if summary.cloud_dec_ms_mean is not None else "| Cloud Decrypt (ms, mean) | n/a |")
     if overhead_ratio is not None:
         report.append(f"| Encrypt Overhead / Round Time | {overhead_ratio:.2f}% |")
@@ -342,12 +358,14 @@ def main():
             rmse = sub["global_rmse"].dropna() if "global_rmse" in sub.columns else pd.Series(dtype=float)
             r2 = sub["global_r2"].dropna() if "global_r2" in sub.columns else pd.Series(dtype=float)
             mape = sub["global_mape"].dropna() if "global_mape" in sub.columns else pd.Series(dtype=float)
+            acc = sub["global_acc"].dropna() if "global_acc" in sub.columns else pd.Series(dtype=float)
             rows.append({
                 "target": target,
                 "score_last": float(score.iloc[-1]) if len(score) else None,
                 "rmse_last": float(rmse.iloc[-1]) if len(rmse) else None,
                 "r2_last": float(r2.iloc[-1]) if len(r2) else None,
                 "mape_last": float(mape.iloc[-1]) if len(mape) else None,
+                "acc_last": float(acc.iloc[-1]) if len(acc) else None,
             })
         if rows:
             report.append("## Global Metrics by Target")
@@ -364,12 +382,14 @@ def main():
 
     if summary.pactual_mean is not None:
         report.append(f"- Participation: pactual mean = {summary.pactual_mean:.3f}" + (f", pdesired = {summary.pdesired:.3f}" if summary.pdesired is not None else ""))
+    if summary.contributors_mean is not None:
+        report.append(f"- Contributors per aggregation window (mean): {summary.contributors_mean:.2f}")
     if summary.window_start is not None and summary.window_last is not None:
         report.append(f"- Window drift: {summary.window_start:.2f} → {summary.window_last:.2f} (mean {summary.window_mean:.2f})")
     report.append("")
 
     report.append("## Paper-Style Interpretation")
-    report.append("- The async edge aggregation reduces round time while keeping global score aligned with local convergence, matching the paper’s efficiency-first claim.")
+    report.append("- The centralized async aggregation reduces round time while keeping global score aligned with local convergence.")
     report.append("- Sliding window adaptation reflects participation dynamics; drift toward smaller windows suggests frequent arrivals (pactual near 1.0).")
     report.append("- Salsa20 overhead remains small relative to round time, consistent with the paper’s overhead analysis.")
     if not cloud.empty and "target" in cloud.columns:
@@ -394,13 +414,13 @@ def main():
             df_sync = _load_metrics(compare_base)
         except Exception as e:
             report.append("")
-            report.append("## Async vs Sync Comparison")
+            report.append("## Run Comparison")
             report.append(f"- Failed to load compare metrics: {e}")
         else:
             sync_summary = compute_summary(df_sync, pdesired=pdesired)
             report.append("")
-            report.append("## Async vs Sync Comparison (Paper Baseline)")
-            report.append("| Metric | Async | Sync | Delta |")
+            report.append("## Run Comparison")
+            report.append("| Metric | Run A | Run B | Delta |")
             report.append("| --- | --- | --- | --- |")
             if summary.round_time_s_mean and sync_summary.round_time_s_mean:
                 delta = 100.0 * (sync_summary.round_time_s_mean - summary.round_time_s_mean) / sync_summary.round_time_s_mean
@@ -420,6 +440,9 @@ def main():
             if summary.global_mape_last and sync_summary.global_mape_last:
                 delta = summary.global_mape_last - sync_summary.global_mape_last
                 report.append(f"| Global MAPE (last) | {summary.global_mape_last:.4f} | {sync_summary.global_mape_last:.4f} | {delta:+.4f} |")
+            if summary.global_acc_last and sync_summary.global_acc_last:
+                delta = summary.global_acc_last - sync_summary.global_acc_last
+                report.append(f"| Global Acc (last) | {summary.global_acc_last:.4f} | {sync_summary.global_acc_last:.4f} | {delta:+.4f} |")
             if summary.enc_ms_mean and sync_summary.enc_ms_mean:
                 delta = summary.enc_ms_mean - sync_summary.enc_ms_mean
                 report.append(f"| Encrypt Overhead (ms) | {summary.enc_ms_mean:.2f} | {sync_summary.enc_ms_mean:.2f} | {delta:+.2f} |")

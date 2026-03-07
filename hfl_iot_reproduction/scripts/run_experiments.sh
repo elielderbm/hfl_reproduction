@@ -11,27 +11,18 @@ echo "[experiments] RUN_ID=${RUN_ID}"
 docker compose up data_prep
 
 run_mode() {
-  local mode="$1"   # async | sync
+  local mode="$1"   # run_a | run_b
   echo "[experiments] running mode=${mode}"
 
   export LOGS_DIR="${BASE_LOGS}/${mode}"
   export OUT_DIR="${BASE_OUT}/${mode}"
-
-  if [[ "${mode}" == "sync" ]]; then
-    export SYNC_MODE=1
-  else
-    export SYNC_MODE=0
-  fi
-
-  export EDGE1_CLIENTS="iot1,iot2"
-  export EDGE2_CLIENTS="iot3,iot4"
 
   docker compose up --build -d
 
   # Aguarda todos os IoTs finalizarem
   while true; do
     running=0
-    for c in iot1 iot2 iot3 iot4; do
+    for c in iot1 iot2 iot3 iot4 iot5 iot6; do
       if docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null | grep -q true; then
         running=1
       fi
@@ -52,12 +43,12 @@ run_mode() {
   docker compose run --rm analyzer python -m project.analysis.paper_report
 }
 
-run_mode async
-run_mode sync
+run_mode run_a
+run_mode run_b
 
-export LOGS_DIR="${BASE_LOGS}/async"
-export OUT_DIR="${BASE_OUT}/async"
-docker compose run --rm analyzer python -m project.analysis.paper_report --compare-dir "${BASE_OUT}/sync"
-docker compose run --rm analyzer python -m project.analysis.compare_async_sync --async-dir "${BASE_OUT}/async" --sync-dir "${BASE_OUT}/sync"
+export LOGS_DIR="${BASE_LOGS}/run_a"
+export OUT_DIR="${BASE_OUT}/run_a"
+docker compose run --rm analyzer python -m project.analysis.paper_report --compare-dir "${BASE_OUT}/run_b"
+docker compose run --rm analyzer python -m project.analysis.compare_async_sync --async-dir "${BASE_OUT}/run_a" --sync-dir "${BASE_OUT}/run_b"
 
 echo "[experiments] done. Logs in ./logs/experiments/${RUN_ID}, outputs in ./outputs/experiments/${RUN_ID}"

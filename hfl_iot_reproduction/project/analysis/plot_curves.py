@@ -72,6 +72,13 @@ def plot():
                 plt.title(f"IoT {key} - MAPE")
                 _save_current_fig(OUT/f"iot_{key}_mape.png"); plt.close()
 
+            acc_col = "val_acc" if "val_acc" in sub.columns else ("train_acc" if "train_acc" in sub.columns else None)
+            if acc_col:
+                plt.figure()
+                sub.plot(x="round", y=acc_col)
+                plt.title(f"IoT {key} - Accuracy")
+                _save_current_fig(OUT/f"iot_{key}_acc.png"); plt.close()
+
             if "distill_rmse" in sub.columns:
                 plt.figure()
                 sub.plot(x="round", y="distill_rmse")
@@ -85,32 +92,20 @@ def plot():
                 plt.title(f"IoT {key} - Round Time (ms)")
                 _save_current_fig(OUT/f"iot_{key}_round_time.png"); plt.close()
 
-    # Edge: window and pactual over time
-    edge = df[(df["type"]=="metric") & (df["file"].str.startswith("edge"))].copy()
-    if not edge.empty:
-        for key, sub in edge.groupby("edge"):
-            plt.figure()
-            sub.plot(y=["window","pactual"])
-            plt.title(f"Edge {key} - Window & Participation")
-            _save_current_fig(OUT/f"edge_{key}_win_p.png"); plt.close()
-            if "edge_ft_rmse" in sub.columns:
-                plt.figure()
-                sub.plot(y="edge_ft_rmse")
-                plt.title(f"Edge {key} - FT RMSE")
-                _save_current_fig(OUT/f"edge_{key}_ft_rmse.png"); plt.close()
-            if "edge_ft_score" in sub.columns:
-                plt.figure()
-                sub.plot(y="edge_ft_score")
-                plt.title(f"Edge {key} - FT Score")
-                _save_current_fig(OUT/f"edge_{key}_ft_score.png"); plt.close()
-
-    # Cloud: round vs edges and global error if available
+    # Cloud: window/pactual and global error if available
     cloud = df[(df["type"]=="metric") & (df["file"].str.startswith("cloud"))].copy()
     if not cloud.empty:
-        plt.figure()
-        cloud.plot(x="round", y="edges")
-        plt.title("Cloud - Edges contributing")
-        _save_current_fig(OUT/f"cloud_edges.png"); plt.close()
+        if "window" in cloud.columns and "pactual" in cloud.columns:
+            plt.figure()
+            cloud.plot(x="round", y=["window","pactual"])
+            plt.title("Cloud - Window & Participation (IoTs)")
+            _save_current_fig(OUT/"cloud_window_pactual.png"); plt.close()
+
+        if "edges" in cloud.columns:
+            plt.figure()
+            cloud.plot(x="round", y="edges")
+            plt.title("Cloud - IoTs contributing")
+            _save_current_fig(OUT/"cloud_iots.png"); plt.close()
 
         if "target" in cloud.columns:
             for t, sub in cloud.groupby("target"):
@@ -124,6 +119,11 @@ def plot():
                     sub.plot(x="round", y="global_score")
                     plt.title(f"Cloud - Global Score ({t})")
                     _save_current_fig(OUT/f"cloud_global_score_{t}.png"); plt.close()
+                if "global_acc" in sub.columns:
+                    plt.figure()
+                    sub.plot(x="round", y="global_acc")
+                    plt.title(f"Cloud - Global Acc ({t})")
+                    _save_current_fig(OUT/f"cloud_global_acc_{t}.png"); plt.close()
                 if "global_r2" in sub.columns:
                     plt.figure()
                     sub.plot(x="round", y="global_r2")
@@ -146,6 +146,12 @@ def plot():
                 cloud.plot(x="round", y="global_score")
                 plt.title("Cloud - Global Score")
                 _save_current_fig(OUT/f"cloud_global_score.png"); plt.close()
+
+            if "global_acc" in cloud.columns:
+                plt.figure()
+                cloud.plot(x="round", y="global_acc")
+                plt.title("Cloud - Global Acc")
+                _save_current_fig(OUT/f"cloud_global_acc.png"); plt.close()
 
             if "global_r2" in cloud.columns:
                 plt.figure()
@@ -192,6 +198,11 @@ def plot():
                 plt.figure()
                 cloud.plot(x="round", y=col)
                 plt.title(f"Cloud - {col.replace('global_', '').replace('_', ' ').upper()} MAPE")
+                _save_current_fig(OUT/f"cloud_{col}.png"); plt.close()
+            if col.startswith("global_") and col.endswith("_acc"):
+                plt.figure()
+                cloud.plot(x="round", y=col)
+                plt.title(f"Cloud - {col.replace('global_', '').replace('_', ' ').upper()} ACC")
                 _save_current_fig(OUT/f"cloud_{col}.png"); plt.close()
             if col.endswith("_teacher_rmse"):
                 plt.figure()

@@ -1,16 +1,15 @@
 # Projeto
 
-Implementação das camadas **IoT**, **Edge** e **Cloud** com:
+Implementação das camadas **IoT** e **Cloud** com:
 - **WebSockets** para comunicação
 - **Salsa20** (criptografia leve) para updates de modelo
-- **Agregação Assíncrona** no Edge com janela deslizante
-- **Agregação Global Ponderada** no Cloud
+- **Agregação Assíncrona Centralizada** no Cloud com janela deslizante
 - **Regressão temporal** (RMSE/MAE/R2/MAPE + score) e **classificação binária** (acurácia/precisão/recall/F1/BCE)
-- **Modelos por camada** (student no IoT/Edge, teacher no Cloud) com suporte a TCN/GRU/MLP
-- **IoT TinyML**: student MLP pequeno; **Edge** pode treinar teacher moderado local
+- **Modelos por camada** (student no IoT, teacher no Cloud) com suporte a TCN/GRU/MLP
+- **IoT TinyML**: student MLP pequeno
 - **Distilação teacher → student** (opcional, controlada por `DISTILL_ALPHA`)
 - **Modelos globais por target** (temperatura, umidade e luminosidade separados)
-- **Edge/Cloud fine-tuning** opcionais para melhorar inferência
+- **Cloud fine-tuning** opcional para melhorar inferência
 - **Métricas e Logs** em JSONL
 - **Scripts de Análise**
 

@@ -1,17 +1,16 @@
-# HFL-IntelLab Docker Simulation (IoT → Edge → Cloud)
+# FL-IntelLab Docker Simulation (IoT → Cloud)
 
-Reprodução **fiel** da metodologia do artigo *“Hierarchical Aggregation for Federated Learning in Heterogeneous IoT Scenarios: Enhancing Privacy and Communication Efficiency”* **+ extensões** (contribuições desta dissertação):
-- Três camadas: **IoT** (dispositivos), **Edge** (pré-agregação assíncrona com janela deslizante), **Cloud** (agregação global ponderada por participação e qualidade).
+Simulação de **FL centralizado assíncrono** (IoT → Cloud) com **extensões** aplicadas ao cenário IoT:
+- Duas camadas: **IoT** (dispositivos) e **Cloud** (agregação assíncrona com janela deslizante e histórico).
 - **Criptografia leve (Salsa20)** sobre *updates* do modelo.
 - **Intel Lab Sensor Data** (MIT) com divisão por **mote** (não-IID por sensor).
 - **Regressão temporal**: previsão de **temperatura/umidade em t+Δ** usando **janelas passadas**.
 - **Classificação binária**: inferência de **luminosidade** (2 estados) em t+Δ.
-- **Modelos por camada**: *student* leve no IoT/Edge (MLP pequena) e *teacher* robusto no Cloud; Edge pode treinar um *teacher* moderado local para melhorar a inferência sem quebrar a agregação.
+- **Modelos por camada**: *student* leve no IoT e *teacher* robusto no Cloud.
 - **Distilação teacher → student** (opcional) para melhorar inferência sem expor dados.
 - **Modelos globais por target** (temperatura, umidade e luminosidade separados).
-- **WebSocket** full-duplex entre camadas.
+- **WebSocket** full-duplex entre IoT e Cloud.
 - Métricas e análises: *score* de qualidade, **RMSE/MAE/R2/MAPE** (regressão), **Acurácia/Precisão/Recall/F1/BCE** (classificação), distillation error, round time, throughput, participação e qualidade.
-- **Barreira de prontidão** (opcional) para iniciar somente quando Edge/IoT estiverem conectados.
 
 > **Importante:** este repositório automatiza **download + preparação** do dataset, **treino federado** por 80 rodadas (configurável), geração de **logs** em JSONL e scripts de **análise** e **plots**.
 
@@ -33,7 +32,7 @@ sudo docker compose run --rm analyzer python -m project.analysis.target_report -
 ├── .env                  # Ajuste se necessário
 ├── docker/               # Dockerfiles por serviço
 ├── data/                 # Scripts para obter e particionar Intel Lab
-├── project/              # Código (IoT/Edge/Cloud) + análises
+├── project/              # Código (IoT/Cloud) + análises
 ├── config/               # Mapas de clientes, dataset e hiperparâmetros
 ├── logs/                 # Logs JSONL por serviço/rodada
 ├── outputs/              # Saídas de análises (CSV/PNG)
@@ -67,18 +66,16 @@ Para cada IoT:
 **Score de qualidade (q):**
 - **Regressão**: usamos RMSE e definimos `score = 1 / (1 + RMSE)`.
 - **Classificação**: usamos **acurácia** como *score*.
-- Esse *score* alimenta a estimativa `q_e` no Edge, mantendo a lógica do paper (qualidade ↑ → peso ↑).
+- O *score* é registrado e usado nas análises (não há ponderação p/q na agregação centralizada).
 
 ## Serviços
 - **data_prep**: faz download e gera janelas temporais do Intel Lab para cada IoT:
 ```
 sudo docker compose up data_prep
 ```
-- **cloud**: agrega modelos dos edges com pesos `v_e = β·p_e + (1-β)·q_e`, mantém **modelo global por target**, treina *teacher* (opcional) com proxy público e envia *feedback*.
-- **edge1/edge2/edge3**: recebem atualizações de IoTs, agregam de forma **assíncrona** usando **janela deslizante** e suavização histórica, **replicando pesos por target**.
+- **cloud**: agrega **diretamente** os updates dos IoTs de forma **assíncrona** com janela deslizante e histórico; mantém **modelo global por target**, treina *teacher* (opcional) e envia *feedback*.
 - **iot1..iot6**: treinam localmente (TensorFlow), enviam atualização criptografada (Salsa20) + métricas locais, e podem usar **distilação** com *teacher*.
 - **analyzer**: consolida logs em CSV e gera gráficos.
-- **baseline (opcional)**: `SYNC_MODE=1` nos edges habilita agregação síncrona (HierFAVG) para comparação.
 
 ## Como usar
 1. **Dependências**: Docker + Docker Compose.
@@ -98,8 +95,8 @@ sudo docker compose up data_prep
     sudo docker compose run --rm analyzer python -m project.analysis.paper_report
     sudo docker compose run --rm analyzer python -m project.analysis.convergence_report --window 5 --show-rounds 5
     sudo docker compose run --rm analyzer python -m project.analysis.target_report --every 1
-    sudo docker compose run --rm analyzer python -m project.analysis.compare_async_sync --async-dir outputs/experiments/<RUN_ID>/async --sync-dir outputs/experiments/<RUN_ID>/sync
-    sudo docker compose run --rm analyzer python -m project.analysis.compare_runs --base outputs/experiments/<RUN_ID>/async --new outputs
+    sudo docker compose run --rm analyzer python -m project.analysis.compare_async_sync --async-dir outputs/experiments/<RUN_ID>/run_a --sync-dir outputs/experiments/<RUN_ID>/run_b
+    sudo docker compose run --rm analyzer python -m project.analysis.compare_runs --base outputs/experiments/<RUN_ID>/run_a --new outputs
     sudo docker compose run --rm analyzer python data/heterogeneity_metrics.py
    ```
 7. **Limpar** (volumes/artefatos): `bash scripts/clean.sh`
@@ -112,20 +109,17 @@ sudo docker compose up data_prep
 - LR/Batch: `LR`, `BATCH_SIZE`
 - Otimizador/estabilidade: `OPTIMIZER` (sgd|adam), `CLIP_NORM`
 - Janela deslizante: `SW_INIT`, `PDESIRED`, `ALPHA_SW`
-- Pesos de agregação: `ALPHA_EDGE` (histórico), `BETA_EDGE` (updates), `BETA_CLOUD` (p vs q)
-- Targets por edge: `EDGE1_TARGET`, `EDGE2_TARGET`, `EDGE3_TARGET` (ex.: temp/humidity/light)
+- Pesos de agregação (Cloud): `ALPHA_EDGE` (histórico) e `BETA_EDGE` (updates)
 - Distilação: `DISTILL_ALPHA`
 - Teacher (cloud): `TEACHER_ENABLE`, `TEACHER_EPOCHS`, `TEACHER_BATCH`, `TEACHER_LR`, `TEACHER_MAX_SAMPLES`, `TEACHER_REFRESH_EVERY`
 - Push do teacher (dados mínimos): `TEACHER_PUSH_INIT`, `TEACHER_PUSH_EVERY` (0 = não enviar pesos do teacher)
 - Fine-tuning no Cloud (student): `SERVER_FT_EPOCHS`, `SERVER_FT_BATCH`, `SERVER_FT_EVERY`, `SERVER_FT_MAX_SAMPLES`, `SERVER_FT_ALPHA`
-- Fine-tuning no Edge (student): `EDGE_FT_EPOCHS`, `EDGE_FT_BATCH`, `EDGE_FT_EVERY`, `EDGE_FT_MAX_SAMPLES`, `EDGE_FT_ALPHA`
 - Modelos por camada: `STUDENT_MODEL_TYPE` (tcn|gru|mlp), `CLOUD_TEACHER_MODEL_TYPE` (tcn|gru|mlp)
-- MLP por camada: `STUDENT_MLP_*` (IoT/Edge, TinyML)
-- Edge teacher: `EDGE_TEACHER_ENABLE`, `EDGE_TEACHER_MODEL_TYPE`, `EDGE_TEACHER_*`, `EDGE_DISTILL_SOURCE`, `EDGE_GRU_*` (tamanho moderado)
+- MLP por camada: `STUDENT_MLP_*` (IoT, TinyML)
 - TCN por camada: `STUDENT_TCN_*`, `CLOUD_TCN_*` (tamanho do modelo)
-- Agregação por amostras no Edge: `EDGE_WEIGHT_BY_SAMPLES`
-- Barreira de prontidão: `CLOUD_WAIT_FOR_EDGES`, `CLOUD_EXPECTED_EDGES`, `EDGE_WAIT_FOR_IOTS`, `EDGE_EXPECTED_IOTS`, `EDGE_WAIT_FOR_CLOUD`, `IOT_WAIT_FOR_READY`
+- Agregação por amostras no Cloud: `EDGE_WEIGHT_BY_SAMPLES`
 - WebSocket tamanho máximo de mensagem: `WS_MAX_SIZE` (ex.: `16mb`); aumente se usar teacher muito grande
+- WebSocket keepalive: `WS_PING_INTERVAL` e `WS_PING_TIMEOUT` (em segundos). Use `0` para desativar pings e evitar `keepalive ping timeout` em treinos longos.
 - Dataset (regressão temporal): `config/dataset.yml`
   - `window_size`, `delta_steps`, `features`, `targets`
   - `scaling.with_target` habilita normalização do alvo por target
@@ -135,24 +129,25 @@ sudo docker compose up data_prep
 - Pesos globais (para análise por target): `SAVE_GLOBAL_WEIGHTS=1` e opcional `SAVE_GLOBAL_WEIGHTS_EVERY`
 - Função de perda: `LOSS_FN` (mse|mae|huber), `HUBER_DELTA` e `LOSS_FN_CLASSIF` (binary_crossentropy)
 
-> **Nota importante:** o *student* (modelo agregado) **precisa ter a mesma arquitetura** em IoT/Edge/Cloud para que os vetores de pesos sejam compatíveis. Modelos maiores no Edge/Cloud devem ser usados como *teacher* e/ou em *fine‑tuning*, sem quebrar a agregação.
+> **Nota:** na arquitetura centralizada (IoT → Cloud), variáveis `EDGE_*` e `SYNC_MODE` são legadas e **não** são usadas, exceto `ALPHA_EDGE`, `BETA_EDGE` e `EDGE_WEIGHT_BY_SAMPLES`, que agora controlam a agregação do Cloud. `BETA_CLOUD` não participa da agregação centralizada.
+
+> **Nota importante:** o *student* (modelo agregado) **precisa ter a mesma arquitetura** em IoT/Cloud para que os vetores de pesos sejam compatíveis. Modelos maiores no Cloud devem ser usados como *teacher* e/ou em *fine‑tuning*, sem quebrar a agregação.
 >
 > Para **tráfego mínimo**, mantenha `TEACHER_PUSH_INIT=0` e `TEACHER_PUSH_EVERY=0`: só os pesos do *student* são transmitidos.
 
 ## Reprodutibilidade
 - Scripts de **pré-processamento** reproduzem o cenário **não-IID por mote** (Intel Lab).
 - **Assíncrono verdadeiro**: IoTs têm *delays* aleatórios (normal) por rodada, emulando heterogeneidade.
-- Agregações e métricas replicam o **método do artigo** (com variáveis/nomes análogos).
+- Agregação e métricas seguem o **FL centralizado assíncrono** com janela deslizante.
 
 ## Extensões (Contribuições)
-- **Modelos temporais (TCN)** em vez de MLP puro, preservando a metodologia HFL.
+- **Modelos temporais (TCN)** em vez de MLP puro, preservando a metodologia FL.
 - **Teacher → Student Distillation** para melhorar a inferência local sem expor dados.
 - **Modelos globais por target** (temperatura e umidade separados) para evitar interferência negativa.
 - **Métricas ampliadas** (R2/MAPE e distillation error) e análises por target.
-- **Edge fine-tuning** opcional (student no edge com proxy data) para melhorar inferência local.
 
-## Experimentos Async vs Sync (HierFAVG)
-Para rodar comparação automática e salvar logs/outputs separados:
+## Experimentos (Comparação entre Execuções)
+Para rodar duas execuções e comparar métrricas:
 ```
 bash scripts/run_experiments.sh
 ```
